@@ -147,7 +147,7 @@ fn pulse(mut audio: ResMut<Audio>, settings: Res<Settings>, c: Res<Calib>, mut q
     if c.error.is_some() { return }
     let t = audio.clock().as_secs() - FIRST_CLICK_S;
     let k = if t < 0.0 { 0.0 } else { let since = t % BEAT_S; (1.0 - since / 0.15).clamp(0.0, 1.0) as f32 };
-    let k = if settings.reduce_motion { k.round() } else { k };
+    let k = if settings.motion_reduced() { k.round() } else { k };
     for mut bg in &mut q { bg.0 = SURFACE_2.mix(&WHITE, k * 0.9) }
 }
 

@@ -54,10 +54,15 @@ en un carril, las notas fuera de la canción y las notas largas demasiado cortas
 ### Ajustes
 
 Cinco secciones, todo se guarda al instante: **Juego** (velocidad, tamaño de las notas, separación entre
-carriles, borde y altura de los círculos fijos —con vista previa—, precisión exigida, sin fallo, HUD),
+carriles, borde y altura de los círculos fijos —con vista previa—, **desactivar efectos visuales**,
+precisión exigida, sin fallo, HUD),
 **Controles** (perfiles y remapeo de las cuatro teclas), **Audio** (volúmenes, dispositivo de salida,
 compensación de audio y **calibración con metrónomo**), **Gráficos** y **Análisis**
 (sensibilidad, notas largas, densidad). `Q`/`E` cambian de sección.
+
+**Desactivar efectos visuales** (también en Gráficos) es el modo competitivo: quita los anillos al acertar,
+el resalte de los círculos fijos al pulsar, los desvanecidos y las animaciones. Juicios, combo, vida y
+progreso siguen mostrándose según sus propios ajustes.
 
 Si tus pulsaciones salen sistemáticamente tarde o pronto, las **Estadísticas** te sugieren la
 compensación de audio, y la **Calibración** la calcula por ti.

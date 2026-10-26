@@ -353,14 +353,14 @@ fn apply_events(commands: &mut Commands, s: &mut Session, audio: &Audio, setting
         match e {
             Event::Judged { note, lane, judgement, .. } => {
                 let idx = s.judge.notes().iter().position(|n| n.id == note);
-                if judgement != Judgement::Miss { audio.hit_sound(); if settings.show_hit_effects { spawn_flash(commands, s, lane, judgement) } }
+                if judgement != Judgement::Miss { audio.hit_sound(); if settings.hit_effects() { spawn_flash(commands, s, lane, judgement) } }
                 if let Some(i) = idx {
                     if judgement == Judgement::Miss {
                         commands.queue(move |w: &mut World| { w.resource_scope(|w, g: Mut<Gfx>| { if let Some(s) = w.get_resource::<Session>() { if let Some(Some(v)) = s.vis.get(i) { let (o, m) = (v.outer, g.missed.clone()); w.entity_mut(o).insert(MeshMaterial2d(m)); } } }); });
                     } else if !s.judge.notes()[i].is_hold() {
                         if let Some(v) = s.vis[i].take() { commands.entity(v.root).despawn() }
                     } else if let Some(Some(v)) = s.vis.get(i).copied() {
-                        if let Some(b) = v.body { commands.queue(move |w: &mut World| { let m = w.resource::<Gfx>().hold_active.clone(); w.entity_mut(b).insert(MeshMaterial2d(m)); }); }
+                        if let (Some(b), true) = (v.body, settings.press_highlight()) { commands.queue(move |w: &mut World| { let m = w.resource::<Gfx>().hold_active.clone(); w.entity_mut(b).insert(MeshMaterial2d(m)); }); }
                     }
                 }
                 show_judgement(commands, judgement);
@@ -402,7 +402,8 @@ fn input(
     mut fills: Query<(&PressFill, &mut Visibility)>,
 ) {
     let kb = settings.keys();
-    for (f, mut v) in &mut fills { *v = if keys.pressed(kb[f.0]) { Visibility::Visible } else { Visibility::Hidden } }
+    let highlight = settings.press_highlight();
+    for (f, mut v) in &mut fills { *v = if highlight && keys.pressed(kb[f.0]) { Visibility::Visible } else { Visibility::Hidden } }
     if keys.just_pressed(KeyCode::Escape) {
         match s.phase {
             Phase::Running | Phase::Countdown { hold: false, .. } => pause(&mut s, &mut audio),
@@ -555,7 +556,7 @@ fn hud(
     for mut t in q.p2().iter_mut() { **t = if sc.combo >= 2 { sc.combo.to_string() } else { String::new() } }
     for (mut j, mut c, mut t) in q.p3().iter_mut() {
         j.age += time.delta_secs();
-        let a = if settings.reduce_motion { (1.0 - (j.age - 0.35) / 0.2).clamp(0.0, 1.0) } else { (1.0 - (j.age - 0.3) / 0.25).clamp(0.0, 1.0) };
+        let a = if settings.minimal_visuals { if j.age < 0.45 { 1.0 } else { 0.0 } } else if settings.reduce_motion { (1.0 - (j.age - 0.35) / 0.2).clamp(0.0, 1.0) } else { (1.0 - (j.age - 0.3) / 0.25).clamp(0.0, 1.0) };
         c.0 = c.0.with_alpha(a);
         if a <= 0.0 && !t.is_empty() { **t = String::new() }
     }

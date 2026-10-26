@@ -16,7 +16,7 @@ use nocturne_core::scoring::HitWindows;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Field {
-    ScrollSpeed, NoteScale, LaneGap, ReceptorBorder, HitLine, Precision, NoFail, ShowJudgement, ShowEffects, ShowProgress, ShowLife,
+    ScrollSpeed, NoteScale, LaneGap, ReceptorBorder, HitLine, MinimalVisuals, Precision, NoFail, ShowJudgement, ShowEffects, ShowProgress, ShowLife,
     Profile, Key(usize), NewProfile, DeleteProfile, ResetProfile,
     MusicVolume, SfxVolume, Device, Offset, Calibrate,
     Fullscreen, Vsync, FpsLimit, InterfaceScale, ReduceMotion, Diagnostics,
@@ -27,10 +27,10 @@ enum Field {
 use Field::*;
 
 const PAGES: [(&str, &[Field]); 5] = [
-    ("Juego", &[ScrollSpeed, NoteScale, LaneGap, ReceptorBorder, HitLine, Precision, NoFail, ShowJudgement, ShowEffects, ShowProgress, ShowLife, ResetAll]),
+    ("Juego", &[ScrollSpeed, NoteScale, LaneGap, ReceptorBorder, HitLine, MinimalVisuals, Precision, NoFail, ShowJudgement, ShowEffects, ShowProgress, ShowLife, ResetAll]),
     ("Controles", &[Profile, Key(0), Key(1), Key(2), Key(3), NewProfile, DeleteProfile, ResetProfile, ResetAll]),
     ("Audio", &[MusicVolume, SfxVolume, Device, Offset, Calibrate, ResetAll]),
-    ("Gráficos", &[Fullscreen, Vsync, FpsLimit, InterfaceScale, ReduceMotion, Diagnostics, ResetAll]),
+    ("Gráficos", &[MinimalVisuals, Fullscreen, Vsync, FpsLimit, InterfaceScale, ReduceMotion, Diagnostics, ResetAll]),
     ("Análisis", &[Sensitivity, Holds, Density, ResetAll]),
 ];
 
@@ -68,7 +68,7 @@ fn enter(mut st: ResMut<SettingsUi>, mut nav: ResMut<MenuNav>) {
 fn label(f: Field) -> &'static str {
     match f {
         ScrollSpeed => "Velocidad de las notas", NoteScale => "Tamaño de las notas", LaneGap => "Separación entre carriles",
-        ReceptorBorder => "Borde de los círculos fijos", HitLine => "Altura de los círculos fijos",
+        ReceptorBorder => "Borde de los círculos fijos", MinimalVisuals => "Desactivar efectos visuales", HitLine => "Altura de los círculos fijos",
         Precision => "Precisión exigida", NoFail => "Sin fallo", ShowJudgement => "Mostrar juicios", ShowEffects => "Efectos al acertar",
         ShowProgress => "Barra de progreso", ShowLife => "Barra de vida",
         Profile => "Perfil de teclas", Key(0) => "Carril 1", Key(1) => "Carril 2", Key(2) => "Carril 3", Key(_) => "Carril 4",
@@ -87,12 +87,13 @@ fn hint(f: Field) -> &'static str {
         ScrollSpeed => "Cuánto tardan las notas en llegar a la línea. Más alto = más rápido y más espacio entre notas.",
         NoteScale => "Tamaño de las notas y de los círculos fijos. No cambia la dificultad.",
         LaneGap => "Espacio libre entre las notas de dos carriles contiguos. 0 = se tocan.",
+        MinimalVisuals => "Modo competitivo: sin anillos al acertar, sin resalte al pulsar, sin desvanecidos ni animaciones. Los juicios, el combo y la vida siguen mostrándose según sus ajustes.",
         ReceptorBorder => "Grosor del borde de los círculos fijos donde hay que pulsar.",
         HitLine => "Distancia de los círculos fijos al borde inferior de la pantalla.",
         Precision => "Ancho de las ventanas de acierto. Estricta las reduce un 25 %; Indulgente las amplía un 30 %.",
         NoFail => "La partida no termina aunque la vida llegue a cero.",
         ShowJudgement => "Muestra Marvelous, Perfect, Great… sobre el campo.",
-        ShowEffects => "Anillo al acertar una nota.",
+        ShowEffects => "Anillo al acertar una nota. Lo anula «Desactivar efectos visuales».",
         ShowProgress => "Línea fina de avance en el borde superior.", ShowLife => "Barra de vida junto al campo.",
         Profile => "← → cambia de perfil. Cada perfil guarda sus cuatro teclas.",
         Key(_) => "Intro y pulsa la nueva tecla. Si ya la usa otro carril, se intercambian. Esc cancela.",
@@ -137,7 +138,8 @@ fn value(s: &Settings, f: Field, st: &SettingsUi) -> String {
         ReceptorBorder => format!("{:.1} px", s.receptor_border),
         HitLine => format!("{:.0} px", s.hit_line_height),
         Precision => precision_index(&s.hit_windows).map_or("Personalizada", |i| PRECISION_PRESETS[i].0).to_string(),
-        NoFail => on(s.no_fail), ShowJudgement => on(s.show_judgement), ShowEffects => on(s.show_hit_effects),
+        NoFail => on(s.no_fail), ShowJudgement => on(s.show_judgement), ShowEffects => on(s.hit_effects()),
+        MinimalVisuals => on(s.minimal_visuals),
         ShowProgress => on(s.show_progress), ShowLife => on(s.show_life),
         Profile => format!("{} ({}/{})", s.profiles[s.active_profile].name, s.active_profile + 1, s.profiles.len()),
         Key(i) => if st.rebinding == Some(i) { "Pulsa una tecla…".into() } else { key_label(s.keys()[i]) },
@@ -193,6 +195,7 @@ fn change(s: &mut Settings, st: &mut SettingsUi, f: Field, dir: i8, fast: bool, 
             s.hit_windows = precision_windows(PRECISION_PRESETS[n as usize].1);
         }
         NoFail => toggle(&mut s.no_fail), ShowJudgement => toggle(&mut s.show_judgement), ShowEffects => toggle(&mut s.show_hit_effects),
+        MinimalVisuals => toggle(&mut s.minimal_visuals),
         ShowProgress => toggle(&mut s.show_progress), ShowLife => toggle(&mut s.show_life),
         Profile => {
             let n = s.profiles.len() as i32;
@@ -488,6 +491,21 @@ mod tests {
         run(&mut s, FpsLimit, -1, false);
         assert_eq!(s.fps_limit, 360, "da la vuelta");
         assert!(s.validate().is_empty(), "{:?}", s.fps_limit);
+    }
+
+    #[test]
+    fn minimal_visuals_toggle_overrides_hit_effects_display() {
+        let mut s = Settings::default();
+        let st = SettingsUi::default();
+        assert_eq!(value(&s, ShowEffects, &st), "Activado");
+        run(&mut s, MinimalVisuals, 0, true);
+        assert!(s.minimal_visuals);
+        assert_eq!(value(&s, MinimalVisuals, &st), "Activado");
+        assert_eq!(value(&s, ShowEffects, &st), "Desactivado", "el modo minimalista se refleja en la fila de efectos");
+        assert!(s.show_hit_effects, "sin tocar el ajuste individual: al volver a los efectos se recupera");
+        run(&mut s, MinimalVisuals, 0, true);
+        assert_eq!(value(&s, ShowEffects, &st), "Activado");
+        assert_eq!(PAGES.iter().filter(|(_, f)| f.contains(&MinimalVisuals)).count(), 2, "aparece en Juego y en Gráficos");
     }
 
     #[test]

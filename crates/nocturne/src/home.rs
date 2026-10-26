@@ -84,7 +84,7 @@ fn act(mut nav: ResMut<MenuNav>, mut next: ResMut<NextState<Screen>>, mut exit: 
 }
 
 fn spin(time: Res<Time>, settings: Res<Settings>, mut q: Query<&mut Transform, With<Eclipse>>) {
-    if settings.reduce_motion { return }
+    if settings.motion_reduced() { return }
     for mut t in &mut q { t.rotation = Quat::from_rotation_z((time.elapsed_secs() * 0.04).sin() * 0.12); }
 }
 
