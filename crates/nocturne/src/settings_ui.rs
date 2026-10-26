@@ -19,7 +19,7 @@ enum Field {
     ScrollSpeed, NoteScale, LaneGap, ReceptorBorder, HitLine, MinimalVisuals, Precision, NoFail, ShowJudgement, ShowEffects, ShowProgress, ShowLife,
     Profile, Key(usize), NewProfile, DeleteProfile, ResetProfile,
     MusicVolume, SfxVolume, Device, Offset, Calibrate,
-    Fullscreen, Vsync, FpsLimit, InterfaceScale, ReduceMotion, Diagnostics,
+    Glow, AnimatedBackground, Fullscreen, Vsync, FpsLimit, InterfaceScale, ReduceMotion, Diagnostics,
     Sensitivity, Holds, Density,
     ResetAll,
 }
@@ -30,7 +30,7 @@ const PAGES: [(&str, &[Field]); 5] = [
     ("Juego", &[ScrollSpeed, NoteScale, LaneGap, ReceptorBorder, HitLine, MinimalVisuals, Precision, NoFail, ShowJudgement, ShowEffects, ShowProgress, ShowLife, ResetAll]),
     ("Controles", &[Profile, Key(0), Key(1), Key(2), Key(3), NewProfile, DeleteProfile, ResetProfile, ResetAll]),
     ("Audio", &[MusicVolume, SfxVolume, Device, Offset, Calibrate, ResetAll]),
-    ("Gráficos", &[MinimalVisuals, Fullscreen, Vsync, FpsLimit, InterfaceScale, ReduceMotion, Diagnostics, ResetAll]),
+    ("Gráficos", &[MinimalVisuals, Glow, AnimatedBackground, Fullscreen, Vsync, FpsLimit, InterfaceScale, ReduceMotion, Diagnostics, ResetAll]),
     ("Análisis", &[Sensitivity, Holds, Density, ResetAll]),
 ];
 
@@ -68,7 +68,7 @@ fn enter(mut st: ResMut<SettingsUi>, mut nav: ResMut<MenuNav>) {
 fn label(f: Field) -> &'static str {
     match f {
         ScrollSpeed => "Velocidad de las notas", NoteScale => "Tamaño de las notas", LaneGap => "Separación entre carriles",
-        ReceptorBorder => "Borde de los círculos fijos", MinimalVisuals => "Desactivar efectos visuales", HitLine => "Altura de los círculos fijos",
+        ReceptorBorder => "Borde de los círculos fijos", MinimalVisuals => "Desactivar efectos visuales", Glow => "Resplandor (bloom)", AnimatedBackground => "Fondo animado", HitLine => "Altura de los círculos fijos",
         Precision => "Precisión exigida", NoFail => "Sin fallo", ShowJudgement => "Mostrar juicios", ShowEffects => "Efectos al acertar",
         ShowProgress => "Barra de progreso", ShowLife => "Barra de vida",
         Profile => "Perfil de teclas", Key(0) => "Carril 1", Key(1) => "Carril 2", Key(2) => "Carril 3", Key(_) => "Carril 4",
@@ -86,6 +86,8 @@ fn hint(f: Field) -> &'static str {
     match f {
         ScrollSpeed => "Cuánto tardan las notas en llegar a la línea. Más alto = más rápido y más espacio entre notas.",
         NoteScale => "Tamaño de las notas y de los círculos fijos. No cambia la dificultad.",
+        Glow => "Halo luminoso alrededor de las notas, las chispas y el eclipse. Lo anula «Desactivar efectos visuales».",
+        AnimatedBackground => "Luz ambiental con el color de la canción y estrellas que titilan y laten al compás. Lo anula «Desactivar efectos visuales».",
         LaneGap => "Espacio libre entre las notas de dos carriles contiguos. 0 = se tocan.",
         MinimalVisuals => "Modo competitivo: sin anillos al acertar, sin resalte al pulsar, sin desvanecidos ni animaciones. Los juicios, el combo y la vida siguen mostrándose según sus ajustes.",
         ReceptorBorder => "Grosor del borde de los círculos fijos donde hay que pulsar.",
@@ -139,7 +141,7 @@ fn value(s: &Settings, f: Field, st: &SettingsUi) -> String {
         HitLine => format!("{:.0} px", s.hit_line_height),
         Precision => precision_index(&s.hit_windows).map_or("Personalizada", |i| PRECISION_PRESETS[i].0).to_string(),
         NoFail => on(s.no_fail), ShowJudgement => on(s.show_judgement), ShowEffects => on(s.hit_effects()),
-        MinimalVisuals => on(s.minimal_visuals),
+        MinimalVisuals => on(s.minimal_visuals), Glow => on(s.glow_on()), AnimatedBackground => on(s.background_fx()),
         ShowProgress => on(s.show_progress), ShowLife => on(s.show_life),
         Profile => format!("{} ({}/{})", s.profiles[s.active_profile].name, s.active_profile + 1, s.profiles.len()),
         Key(i) => if st.rebinding == Some(i) { "Pulsa una tecla…".into() } else { key_label(s.keys()[i]) },
@@ -195,7 +197,7 @@ fn change(s: &mut Settings, st: &mut SettingsUi, f: Field, dir: i8, fast: bool, 
             s.hit_windows = precision_windows(PRECISION_PRESETS[n as usize].1);
         }
         NoFail => toggle(&mut s.no_fail), ShowJudgement => toggle(&mut s.show_judgement), ShowEffects => toggle(&mut s.show_hit_effects),
-        MinimalVisuals => toggle(&mut s.minimal_visuals),
+        MinimalVisuals => toggle(&mut s.minimal_visuals), Glow => toggle(&mut s.glow), AnimatedBackground => toggle(&mut s.animated_background),
         ShowProgress => toggle(&mut s.show_progress), ShowLife => toggle(&mut s.show_life),
         Profile => {
             let n = s.profiles.len() as i32;
@@ -237,7 +239,7 @@ fn change(s: &mut Settings, st: &mut SettingsUi, f: Field, dir: i8, fast: bool, 
         ReduceMotion => toggle(&mut s.reduce_motion), Diagnostics => toggle(&mut s.show_diagnostics),
         Sensitivity => slide(&mut s.onset_sensitivity, dir, activate, 0.05, 0.0, 1.0),
         Holds => toggle(&mut s.generate_holds),
-        Density => slide(&mut s.density_scale, dir, activate, 0.05, 0.5, 2.0),
+        Density => slide(&mut s.density_scale, dir, activate, 0.05, 0.5, 3.0),
         ResetAll => if activate {
             if st.confirm_reset {
                 let device = s.audio_device.clone();
@@ -506,6 +508,23 @@ mod tests {
         run(&mut s, MinimalVisuals, 0, true);
         assert_eq!(value(&s, ShowEffects, &st), "Activado");
         assert_eq!(PAGES.iter().filter(|(_, f)| f.contains(&MinimalVisuals)).count(), 2, "aparece en Juego y en Gráficos");
+    }
+
+    #[test]
+    fn glow_and_background_have_their_own_switches_and_the_master_overrides() {
+        let mut s = Settings::default();
+        let st = SettingsUi::default();
+        assert_eq!((value(&s, Glow, &st).as_str(), value(&s, AnimatedBackground, &st).as_str()), ("Activado", "Activado"));
+        run(&mut s, Glow, 0, true);
+        run(&mut s, AnimatedBackground, 0, true);
+        assert!(!s.glow && !s.animated_background);
+        assert_eq!((value(&s, Glow, &st).as_str(), value(&s, AnimatedBackground, &st).as_str()), ("Desactivado", "Desactivado"));
+        run(&mut s, Glow, 0, true);
+        run(&mut s, AnimatedBackground, 0, true);
+        run(&mut s, MinimalVisuals, 0, true);
+        assert_eq!((value(&s, Glow, &st).as_str(), value(&s, AnimatedBackground, &st).as_str()), ("Desactivado", "Desactivado"),
+            "el modo minimalista se refleja aunque los interruptores sigan activos");
+        assert!(s.glow && s.animated_background, "y al volver a los efectos se recuperan tal cual");
     }
 
     #[test]

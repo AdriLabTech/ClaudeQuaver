@@ -2,11 +2,17 @@
 
 **Tu música, convertida en mapa de ritmo.** Nocturne es un juego de ritmo de cuatro carriles escrito
 en Rust (Bevy). Importas una canción, la analiza (tempo, golpes, compases, patrones) y genera
-automáticamente cuatro mapas —Easy, Normal, Hard y Expert—. Después juegas, miras tus estadísticas y,
+automáticamente seis mapas —Easy, Normal, Hard, Expert, Master y Extreme—. Después juegas, miras tus estadísticas y,
 si un mapa no te convence, lo corriges en el editor.
 
 * Pista limpia: cuatro círculos fijos y notas blancas lisas que caen hasta ellos. Sin líneas, sin letras.
+* Visual cuidado, en la línea de osu!, Etterna y Quaver: fondo con estrellas y luz ambiental que late con el
+  tempo de la canción, resplandor (bloom) en las notas, haces de luz y ráfagas de partículas al acertar,
+  juicio y combo animados, portadas generadas por canción con su color de acento, transiciones entre
+  pantallas y resultados que cuentan hasta tu puntuación. Todo apagable (ver «Ajustes»).
 * Análisis determinista: el mismo audio produce siempre el mismo mapa.
+* Seis dificultades, de Easy (~1 nota/s) a **Extreme** (más de 14 notas/s sostenidas, con saltos, manos de tres
+  notas y *streams*), y un **nivel numérico** por mapa para compararlos entre canciones.
 * Todo local: biblioteca en SQLite, mapas en JSON, ajustes en JSON. Sin red.
 
 ## Instalación
@@ -89,7 +95,8 @@ Para probar sin instalar nada en cualquier distribución: `cargo run --release -
 3. `Esc` pausa. Al terminar ves tu nota, la distribución de errores (¿pulsas pronto o tarde?) y se guarda en
    las estadísticas.
 4. **Editar mapa** (`E`) abre el mapa en el editor.
-5. **Reanalizar** (`R`) regenera los cuatro mapas (por ejemplo tras subir la sensibilidad en Ajustes).
+5. **Reanalizar** (`R`) regenera los seis mapas (por ejemplo tras subir la sensibilidad en Ajustes, o para crear
+   los niveles Master y Extreme en canciones importadas con una versión anterior).
 
 ### Editor de mapas
 
@@ -117,9 +124,15 @@ precisión exigida, sin fallo, HUD),
 compensación de audio y **calibración con metrónomo**), **Gráficos** y **Análisis**
 (sensibilidad, notas largas, densidad). `Q`/`E` cambian de sección.
 
-**Desactivar efectos visuales** (también en Gráficos) es el modo competitivo: quita los anillos al acertar,
-el resalte de los círculos fijos al pulsar, los desvanecidos y las animaciones. Juicios, combo, vida y
-progreso siguen mostrándose según sus propios ajustes.
+**Desactivar efectos visuales** (también en Gráficos) es el modo competitivo: quita el fondo animado, el
+resplandor, los haces y ráfagas al acertar, los anillos, el resalte de los círculos fijos al pulsar, los
+desvanecidos y las animaciones. Se queda la pista limpia y el juicio con una sombra oscura para que se lea
+sobre las notas blancas. Juicios, combo, vida y progreso siguen mostrándose según sus propios ajustes.
+
+En **Gráficos** hay además dos interruptores independientes —**Resplandor (bloom)** y **Fondo animado**—
+para quien quiera conservar parte de los efectos, y **Reducir movimiento**, que deja las animaciones en su
+estado final sin moverse. El modo minimalista manda sobre todos ellos y, al desactivarlo, recuperas tus
+valores tal cual.
 
 Si tus pulsaciones salen sistemáticamente tarde o pronto, las **Estadísticas** te sugieren la
 compensación de audio, y la **Calibración** la calcula por ti.
@@ -156,6 +169,11 @@ packaging/             entrada de escritorio (.desktop) para el lanzador de apli
 
 Decisiones de diseño que conviene conocer:
 
+* **Efectos nativos, sin webview**: los efectos (`crates/nocturne/src/fx.rs`) se dibujan con Bevy, no con una
+  web incrustada. Un webview hijo (`wry`) solo se puede incrustar en X11, y en Wayland (Hyprland, niri,
+  Ryoku) no funciona; además pasaría por un navegador la entrada y el dibujo de las notas, con latencia
+  añadida, justo lo que un juego competitivo no puede permitirse. Con Bevy, notas y efectos comparten el
+  mismo reloj de audio.
 * **Reloj de audio**: la posición de la música sale del reloj del dispositivo (con su latencia
   compensada) y se suaviza contra el reloj monotónico; la posición de cada nota se calcula a partir de
   él, nunca acumulando desplazamientos por fotograma, así que no depende de los FPS.

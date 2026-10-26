@@ -1,5 +1,6 @@
 //! Pantalla de inicio: composición asimétrica con un eclipse abstracto.
 use crate::app::{AppDb, Screen};
+use crate::fx;
 use crate::jobs::{Jobs, NoticeKind};
 use crate::settings::Settings;
 use crate::theme::*;
@@ -14,6 +15,7 @@ const ID_ABOUT: u32 = 5;
 const ID_QUIT: u32 = 6;
 
 #[derive(Component)] struct Eclipse;
+#[derive(Component)] struct EclipseGlow;
 #[derive(Component)] struct JobLine;
 
 pub fn plugin(app: &mut App) {
@@ -21,16 +23,19 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (ui::menu_input, ui::menu_visuals, act, spin, job_line).chain().run_if(in_state(Screen::Home)));
 }
 
-fn build(mut commands: Commands, fonts: Res<Fonts>, mut nav: ResMut<MenuNav>, db: Res<AppDb>,
-         mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<ColorMaterial>>) {
+fn build(mut commands: Commands, fonts: Res<Fonts>, mut nav: ResMut<MenuNav>, db: Res<AppDb>, fx: Res<fx::Fx>,
+         mut accent: ResMut<fx::Accent>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<ColorMaterial>>) {
     nav.reset(6);
+    accent.target = fx::Accent::default().target;
     // Eclipse: disco claro, disco negro desplazado → creciente; corona fina alrededor.
     let disc = meshes.add(Circle::new(1.0).mesh().resolution(180));
     let ring = meshes.add(Annulus::new(0.995, 1.0).mesh().resolution(240));
     let (c0, c1) = (480.0, 20.0);
     commands.spawn((DespawnOnExit(Screen::Home), Eclipse, Transform::from_xyz(c0, c1, 0.0), Visibility::default())).with_children(|p| {
+        // Halo suave tras el eclipse y creciente «caliente» (brilla con el resplandor activo).
+        p.spawn((EclipseGlow, Mesh2d(fx.glow.clone()), MeshMaterial2d(mats.add(accent.current.with_alpha(0.30))), Transform::from_xyz(0.0, 0.0, -0.2).with_scale(Vec3::splat(600.0))));
         p.spawn((Mesh2d(disc.clone()), MeshMaterial2d(mats.add(alpha(SURFACE_2, 1.0))), Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(330.0))));
-        p.spawn((Mesh2d(disc.clone()), MeshMaterial2d(mats.add(TEXT)), Transform::from_xyz(0.0, 0.0, 0.1).with_scale(Vec3::splat(262.0))));
+        p.spawn((Mesh2d(disc.clone()), MeshMaterial2d(mats.add(Color::srgb(1.7, 1.7, 1.8))), Transform::from_xyz(0.0, 0.0, 0.1).with_scale(Vec3::splat(262.0))));
         p.spawn((Mesh2d(disc.clone()), MeshMaterial2d(mats.add(BG)), Transform::from_xyz(-34.0, 18.0, 0.2).with_scale(Vec3::splat(256.0))));
         for (r, a) in [(300.0, 0.30), (330.0, 0.16), (390.0, 0.07)] {
             p.spawn((Mesh2d(ring.clone()), MeshMaterial2d(mats.add(alpha(TEXT_DIM, a))), Transform::from_xyz(0.0, 0.0, 0.05).with_scale(Vec3::splat(r))));
@@ -40,18 +45,19 @@ fn build(mut commands: Commands, fonts: Res<Fonts>, mut nav: ResMut<MenuNav>, db
     let recent = db.0.lock().ok().and_then(|d| d.recent(1).ok()).and_then(|v| v.into_iter().next());
     commands.spawn((DespawnOnExit(Screen::Home), ui::full_screen_root())).with_children(|p| {
         p.spawn(Node { position_type: PositionType::Absolute, left: px(140), top: px(150), flex_direction: FlexDirection::Column, ..default() }).with_children(|c| {
-            c.spawn(ui::spaced(&fonts, APP_NAME.to_uppercase(), 104.0, TEXT, Weight::Light, 22.0));
-            c.spawn(Node { margin: UiRect::left(px(6)), ..default() }).with_children(|t| { t.spawn(ui::text(&fonts, "Tu música, convertida en mapa de ritmo.", 22.0, TEXT_DIM, Weight::Regular)); });
+            c.spawn((ui::spaced(&fonts, APP_NAME.to_uppercase(), 104.0, TEXT, Weight::Light, 22.0), fx::appear(0.04, Vec2::new(-80.0, 0.0))));
+            c.spawn((Node { margin: UiRect::left(px(6)), ..default() }, fx::appear(0.2, Vec2::new(-50.0, 0.0))))
+                .with_children(|t| { t.spawn(ui::text(&fonts, "Tu música, convertida en mapa de ritmo.", 22.0, TEXT_DIM, Weight::Regular)); });
             c.spawn(Node { height: px(64), ..default() });
-            c.spawn(ui::menu_item(&fonts, ID_LIBRARY, 0, "Biblioteca", Some("Importa una canción y juega"), 40.0));
-            c.spawn(ui::menu_item(&fonts, ID_EDITOR, 1, "Editor de mapas", None, 30.0));
-            c.spawn(ui::menu_item(&fonts, ID_STATS, 2, "Estadísticas", None, 30.0));
-            c.spawn(ui::menu_item(&fonts, ID_SETTINGS, 3, "Ajustes", None, 30.0));
-            c.spawn(ui::menu_item(&fonts, ID_ABOUT, 4, "Acerca de", None, 30.0));
-            c.spawn(ui::menu_item(&fonts, ID_QUIT, 5, "Salir", None, 30.0));
+            c.spawn((ui::menu_item(&fonts, ID_LIBRARY, 0, "Biblioteca", Some("Importa una canción y juega"), 40.0), fx::appear(0.32 + 0.07 * 0 as f32, Vec2::new(-56.0, 0.0))));
+            c.spawn((ui::menu_item(&fonts, ID_EDITOR, 1, "Editor de mapas", None, 30.0), fx::appear(0.32 + 0.07 * 1 as f32, Vec2::new(-56.0, 0.0))));
+            c.spawn((ui::menu_item(&fonts, ID_STATS, 2, "Estadísticas", None, 30.0), fx::appear(0.32 + 0.07 * 2 as f32, Vec2::new(-56.0, 0.0))));
+            c.spawn((ui::menu_item(&fonts, ID_SETTINGS, 3, "Ajustes", None, 30.0), fx::appear(0.32 + 0.07 * 3 as f32, Vec2::new(-56.0, 0.0))));
+            c.spawn((ui::menu_item(&fonts, ID_ABOUT, 4, "Acerca de", None, 30.0), fx::appear(0.32 + 0.07 * 4 as f32, Vec2::new(-56.0, 0.0))));
+            c.spawn((ui::menu_item(&fonts, ID_QUIT, 5, "Salir", None, 30.0), fx::appear(0.32 + 0.07 * 5 as f32, Vec2::new(-56.0, 0.0))));
         });
         // Estado inferior: última canción, último resultado, análisis en curso.
-        p.spawn(Node { position_type: PositionType::Absolute, left: px(148), bottom: px(56), flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }).with_children(|c| {
+        p.spawn((Node { position_type: PositionType::Absolute, left: px(148), bottom: px(56), flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }, fx::appear(0.9, Vec2::new(0.0, 20.0)))).with_children(|c| {
             match &last {
                 Some(s) => { c.spawn(ui::text(&fonts, format!("Última canción · {}", s.title), 18.0, TEXT_DIM, Weight::Regular)); }
                 None => { c.spawn(ui::text(&fonts, "Aún no has jugado ninguna canción.", 18.0, TEXT_DIM, Weight::Regular)); }
@@ -83,9 +89,12 @@ fn act(mut nav: ResMut<MenuNav>, mut next: ResMut<NextState<Screen>>, mut exit: 
     }
 }
 
-fn spin(time: Res<Time>, settings: Res<Settings>, mut q: Query<&mut Transform, With<Eclipse>>) {
+fn spin(time: Res<Time>, settings: Res<Settings>, mut q: Query<&mut Transform, With<Eclipse>>, mut glow: Query<&mut Transform, (With<EclipseGlow>, Without<Eclipse>)>) {
     if settings.motion_reduced() { return }
-    for mut t in &mut q { t.rotation = Quat::from_rotation_z((time.elapsed_secs() * 0.04).sin() * 0.12); }
+    let t = time.elapsed_secs();
+    for mut tr in &mut q { tr.rotation = Quat::from_rotation_z((t * 0.04).sin() * 0.12); }
+    // El halo «respira» con un ritmo lento, como una luz de fondo.
+    for mut g in &mut glow { g.scale = Vec3::splat(600.0 * (1.0 + 0.05 * (t * 0.9).sin())) }
 }
 
 fn job_line(jobs: Res<Jobs>, mut q: Query<&mut Text, With<JobLine>>) {

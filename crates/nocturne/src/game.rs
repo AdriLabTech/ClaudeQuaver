@@ -7,6 +7,8 @@
 use crate::app::{AppDb, ReturnTo, Screen};
 use crate::audio::{prepare, Audio};
 use crate::settings::{Settings, NOTE_BASE_R};
+use bevy::color::Mix;
+use crate::fx;
 use crate::theme::*;
 use crate::ui::{self, MenuNav};
 use bevy::prelude::*;
@@ -74,6 +76,8 @@ pub struct Session {
     hit_y: f32,
     scale: f32,
     pitch: f32,
+    /// Intensidad (0..1) de la luz de cada carril: sube al pulsar o acertar y decae sola.
+    lane_level: [f32; 4],
     vis: Vec<Option<Vis>>,
     next_spawn: usize,
     bot_cursor: usize,
@@ -91,6 +95,9 @@ struct Gfx {
     ring: Handle<Mesh>,
     rect: Handle<Mesh>,
     note: Handle<ColorMaterial>,
+    /// Un material por carril para el haz y el resplandor (su opacidad cambia cada fotograma).
+    beam: [Handle<ColorMaterial>; 4],
+    glow: [Handle<ColorMaterial>; 4],
     missed: Handle<ColorMaterial>,
     hold_body: Handle<ColorMaterial>,
     hold_active: Handle<ColorMaterial>,
@@ -103,8 +110,12 @@ struct Gfx {
 #[derive(Component)] struct Flash { life: f32, max: f32, base: f32 }
 #[derive(Component)] struct ScoreText;
 #[derive(Component)] struct AccText;
-#[derive(Component)] struct ComboText;
-#[derive(Component)] struct JudgeText { age: f32 }
+#[derive(Component)] struct ComboText { shown: u32, age: f32 }
+#[derive(Component)] struct JudgeText { age: f32, base_y: f32 }
+/// Sombra oscura del juicio: el texto es blanco y las notas también, sin ella se pierde al cruzarse.
+#[derive(Component)] struct JudgeShadow;
+#[derive(Component)] struct LaneBeam(usize);
+#[derive(Component)] struct LaneGlow(usize);
 #[derive(Component)] struct ProgressFill;
 #[derive(Component)] struct LifeFill;
 #[derive(Component)] struct CountdownText;
@@ -118,7 +129,7 @@ const ID_QUIT: u32 = 3;
 pub fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Playing), begin)
         .add_systems(OnExit(Screen::Playing), end)
-        .add_systems(Update, (drive, input, sync_notes, hud, effects, pause_menu).chain().run_if(in_state(Screen::Playing)));
+        .add_systems(Update, (drive, input, lane_fx, sync_notes, hud, effects, pause_menu).chain().run_if(in_state(Screen::Playing)));
 }
 
 fn begin(
@@ -130,8 +141,11 @@ fn begin(
     mut mats: ResMut<Assets<ColorMaterial>>,
     fonts: Res<Fonts>,
     mut nav: ResMut<MenuNav>,
+    fx: Res<fx::Fx>,
+    mut accent: ResMut<fx::Accent>,
 ) {
     nav.enabled = false;
+    accent.target = fx::accent_for(&req.map.audio_fingerprint);
     let radius = settings.note_radius();
     // El anillo es una malla unidad que se escala al radio: su radio interior sale del grosor pedido en px.
     let inner = (1.0 - settings.receptor_border / radius).clamp(0.05, 0.98);
@@ -139,7 +153,10 @@ fn begin(
         circle: meshes.add(Circle::new(1.0).mesh().resolution(96)),
         ring: meshes.add(Annulus::new(inner, 1.0).mesh().resolution(96)),
         rect: meshes.add(Rectangle::new(1.0, 1.0)),
-        note: mats.add(WHITE),
+        // Blanco «caliente» (>1): con el resplandor activo las notas brillan; sin él se ve blanco puro.
+        note: mats.add(Color::srgb(1.35, 1.35, 1.35)),
+        beam: std::array::from_fn(|_| mats.add(alpha(WHITE, 0.0))),
+        glow: std::array::from_fn(|_| mats.add(alpha(WHITE, 0.0))),
         missed: mats.add(alpha(WHITE, 0.18)),
         hold_body: mats.add(alpha(WHITE, 0.34)),
         hold_active: mats.add(alpha(WHITE, 0.8)),
@@ -158,6 +175,26 @@ fn begin(
             Transform::from_xyz(x, hit_y, 5.0).with_scale(Vec3::new(r, r, 1.0))));
         commands.spawn((DespawnOnExit(Screen::Playing), PressFill(i), Mesh2d(gfx.circle.clone()), MeshMaterial2d(gfx.press_fill.clone()),
             Transform::from_xyz(x, hit_y, 4.8).with_scale(Vec3::new(r, r, 1.0)), Visibility::Hidden));
+        if settings.press_highlight() {
+            // Haz de luz que sube desde el círculo fijo y halo suave alrededor (se apagan con el modo minimalista).
+            commands.spawn((DespawnOnExit(Screen::Playing), LaneBeam(i), Mesh2d(fx.fade_up.clone()), MeshMaterial2d(gfx.beam[i].clone()),
+                Transform::from_xyz(x, hit_y, 3.0).with_scale(Vec3::new(r * 1.9, 640.0, 1.0)), Visibility::Hidden));
+            commands.spawn((DespawnOnExit(Screen::Playing), LaneGlow(i), Mesh2d(fx.glow.clone()), MeshMaterial2d(gfx.glow[i].clone()),
+                Transform::from_xyz(x, hit_y, 4.6).with_scale(Vec3::new(r * 2.6, r * 2.6, 1.0)), Visibility::Hidden));
+        }
+    }
+    // Combo (detrás de las notas) y juicio (por encima), en el mundo para controlar su profundidad.
+    commands.spawn((DespawnOnExit(Screen::Playing), ComboText { shown: 0, age: 9.0 }, Text2d::new(""),
+        TextFont { font: fonts.light.clone().into(), font_size: FontSize::Px(84.0), ..default() }, TextColor(alpha(TEXT, 0.5)),
+        Transform::from_xyz(0.0, 230.0, 3.4)));
+    if settings.show_judgement {
+        let base_y = hit_y + radius * 2.0 + 120.0;
+        commands.spawn((DespawnOnExit(Screen::Playing), JudgeText { age: 9.0, base_y }, Text2d::new(""),
+            TextFont { font: fonts.medium.clone().into(), font_size: FontSize::Px(42.0), ..default() }, TextColor(WHITE),
+            Transform::from_xyz(0.0, base_y, 7.0)));
+        commands.spawn((DespawnOnExit(Screen::Playing), JudgeShadow, Text2d::new(""),
+            TextFont { font: fonts.medium.clone().into(), font_size: FontSize::Px(42.0), ..default() }, TextColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+            Transform::from_xyz(3.0, base_y - 3.0, 6.9)));
     }
     commands.insert_resource(gfx);
     spawn_hud(&mut commands, &fonts, &req, &settings);
@@ -189,7 +226,7 @@ fn begin(
     let n = judge.notes().len();
     let last = req.map.notes.iter().map(|n| n.end().0).max().unwrap_or(0);
     commands.insert_resource(Session {
-        judge, phase, load_rx, wall_start: None, silent, offset_us, speed, hit_y, scale: settings.note_scale, pitch,
+        judge, phase, load_rx, wall_start: None, silent, offset_us, speed, hit_y, scale: settings.note_scale, pitch, lane_level: [0.0; 4],
         vis: vec![None; n], next_spawn: 0, bot_cursor: 0, last_t: req.start - Micros::from_secs(3.0), error: None,
         max_ms: (last.max(req.map.duration.0 / 2) / 1000) + 1500, req: req.clone(),
     });
@@ -202,6 +239,7 @@ fn countdown_start(start: Micros) -> Phase {
 
 fn end(mut commands: Commands, mut audio: ResMut<Audio>) {
     audio.pause();
+    commands.insert_resource(fx::Pulse(0.0));
     commands.remove_resource::<Session>();
     commands.remove_resource::<Gfx>();
 }
@@ -221,15 +259,6 @@ fn spawn_hud(commands: &mut Commands, fonts: &Fonts, req: &PlayRequest, s: &Sett
             .with_children(|c| {
                 c.spawn((ScoreText, ui::text(fonts, "0000000", 58.0, TEXT, Weight::Light)));
                 c.spawn((AccText, ui::text(fonts, "100.00%", 24.0, TEXT_DIM, Weight::Regular)));
-            });
-        // Combo y juicio sobre el campo
-        p.spawn(Node { position_type: PositionType::Absolute, width: percent(100), top: percent(24), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() })
-            .with_children(|c| {
-                c.spawn((ComboText, ui::text(fonts, "", 76.0, TEXT, Weight::Light)));
-            });
-        p.spawn(Node { position_type: PositionType::Absolute, width: percent(100), top: percent(52), justify_content: JustifyContent::Center, ..default() })
-            .with_children(|c| {
-                if s.show_judgement { c.spawn((JudgeText { age: 9.0 }, ui::text(fonts, "", 40.0, WHITE, Weight::Medium))); }
             });
         // Cuenta atrás grande
         p.spawn(Node { position_type: PositionType::Absolute, width: percent(100), top: percent(38), justify_content: JustifyContent::Center, ..default() })
@@ -353,7 +382,15 @@ fn apply_events(commands: &mut Commands, s: &mut Session, audio: &Audio, setting
         match e {
             Event::Judged { note, lane, judgement, .. } => {
                 let idx = s.judge.notes().iter().position(|n| n.id == note);
-                if judgement != Judgement::Miss { audio.hit_sound(); if settings.hit_effects() { spawn_flash(commands, s, lane, judgement) } }
+                if judgement != Judgement::Miss {
+                    audio.hit_sound();
+                    s.lane_level[lane as usize % 4] = 1.0;
+                    if settings.hit_effects() {
+                        spawn_flash(commands, s, lane, judgement);
+                        let n = match judgement { Judgement::Marvelous => 9, Judgement::Perfect => 7, Judgement::Great => 5, Judgement::Good => 3, _ => 2 };
+                        fx::burst(commands, Screen::Playing, Vec2::new((lane as f32 - 1.5) * s.pitch, s.hit_y), n, 300.0, 4.6, 0.55);
+                    }
+                }
                 if let Some(i) = idx {
                     if judgement == Judgement::Miss {
                         commands.queue(move |w: &mut World| { w.resource_scope(|w, g: Mut<Gfx>| { if let Some(s) = w.get_resource::<Session>() { if let Some(Some(v)) = s.vis.get(i) { let (o, m) = (v.outer, g.missed.clone()); w.entity_mut(o).insert(MeshMaterial2d(m)); } } }); });
@@ -376,7 +413,7 @@ fn apply_events(commands: &mut Commands, s: &mut Session, audio: &Audio, setting
 
 fn show_judgement(commands: &mut Commands, j: Judgement) {
     commands.queue(move |w: &mut World| {
-        let mut q = w.query::<(&mut JudgeText, &mut Text, &mut TextColor)>();
+        let mut q = w.query::<(&mut JudgeText, &mut Text2d, &mut TextColor)>();
         for (mut jt, mut t, mut c) in q.iter_mut(w) { jt.age = 0.0; **t = j.label().to_uppercase(); c.0 = judgement_color(j) }
     });
 }
@@ -404,6 +441,7 @@ fn input(
     let kb = settings.keys();
     let highlight = settings.press_highlight();
     for (f, mut v) in &mut fills { *v = if highlight && keys.pressed(kb[f.0]) { Visibility::Visible } else { Visibility::Hidden } }
+    for (i, k) in kb.iter().enumerate() { if keys.pressed(*k) { s.lane_level[i] = 1.0 } }
     if keys.just_pressed(KeyCode::Escape) {
         match s.phase {
             Phase::Running | Phase::Countdown { hold: false, .. } => pause(&mut s, &mut audio),
@@ -543,9 +581,12 @@ fn hud(
     audio: Res<Audio>,
     settings: Res<Settings>,
     mut q: ParamSet<(
-        Query<&mut Text, With<ScoreText>>, Query<&mut Text, With<AccText>>, Query<&mut Text, With<ComboText>>,
-        Query<(&mut JudgeText, &mut TextColor, &mut Text)>, Query<&mut Text, With<CountdownText>>, Query<&mut Text, With<StatusText>>,
+        Query<&mut Text, With<ScoreText>>, Query<&mut Text, With<AccText>>,
+        Query<(&mut ComboText, &mut Text2d, &mut Transform), (Without<JudgeText>, Without<JudgeShadow>)>,
+        Query<(&mut JudgeText, &mut TextColor, &mut Text2d, &mut Transform), (Without<ComboText>, Without<JudgeShadow>)>, Query<&mut Text, With<CountdownText>>, Query<&mut Text, With<StatusText>>,
+        Query<(&mut Text2d, &mut TextColor, &mut Transform), (With<JudgeShadow>, Without<JudgeText>, Without<ComboText>)>,
     )>,
+    mut pulse: ResMut<fx::Pulse>,
     mut prog: Query<&mut Node, (With<ProgressFill>, Without<LifeFill>)>,
     mut life: Query<(&mut Node, &mut BackgroundColor), (With<LifeFill>, Without<ProgressFill>)>,
     time: Res<Time>,
@@ -553,13 +594,43 @@ fn hud(
     let sc = &s.judge.score;
     for mut t in q.p0().iter_mut() { **t = format!("{:07}", sc.score()) }
     for mut t in q.p1().iter_mut() { **t = format!("{:.2}%", sc.accuracy()) }
-    for mut t in q.p2().iter_mut() { **t = if sc.combo >= 2 { sc.combo.to_string() } else { String::new() } }
-    for (mut j, mut c, mut t) in q.p3().iter_mut() {
+    let still = settings.motion_reduced();
+    for (mut c, mut t, mut tf) in q.p2().iter_mut() {
+        if sc.combo != c.shown { if sc.combo > c.shown && sc.combo >= 2 { c.age = 0.0 } c.shown = sc.combo }
+        c.age += time.delta_secs();
+        let want = if sc.combo >= 2 { sc.combo.to_string() } else { String::new() };
+        if **t != want { **t = want }
+        // Cada acierto «da un golpe» al número: crece un poco y vuelve.
+        tf.scale = Vec3::splat(if still { 1.0 } else { 1.0 + 0.3 * (1.0 - fx::ease_out_cubic(c.age / 0.16)) });
+    }
+    let mut judge_view: Option<(String, f32, Vec3, f32)> = None;
+    for (mut j, mut c, mut t, mut tf) in q.p3().iter_mut() {
         j.age += time.delta_secs();
         let a = if settings.minimal_visuals { if j.age < 0.45 { 1.0 } else { 0.0 } } else if settings.reduce_motion { (1.0 - (j.age - 0.35) / 0.2).clamp(0.0, 1.0) } else { (1.0 - (j.age - 0.3) / 0.25).clamp(0.0, 1.0) };
         c.0 = c.0.with_alpha(a);
         if a <= 0.0 && !t.is_empty() { **t = String::new() }
+        // El juicio aparece grande, rebota un poco por debajo de su tamaño y se asienta.
+        let k = fx::ease_out_back(j.age / 0.22);
+        tf.scale = Vec3::splat(if still { 1.0 } else { 1.0 + 0.45 * (1.0 - k) });
+        tf.translation.y = j.base_y + if still { 0.0 } else { 16.0 * fx::ease_out_cubic(j.age / 0.45) };
+        judge_view = Some(((**t).clone(), a, tf.scale, tf.translation.y));
     }
+    if let Some((text, a, scale, y)) = judge_view {
+        for (mut t, mut c, mut tf) in q.p6().iter_mut() {
+            if **t != text { **t = text.clone() }
+            c.0 = Color::srgba(0.0, 0.0, 0.0, 0.8 * a);
+            tf.scale = scale;
+            tf.translation.y = y - 3.0;
+        }
+    }
+    // Pulso al compás: cae rápido al empezar cada pulso (lo usa el fondo). Solo con música y con tempo.
+    let m = &s.req.map.music;
+    pulse.0 = match (m.bpm, m.first_beat, matches!(s.phase, Phase::Running)) {
+        (Some(bpm), Some(first), true) if settings.background_fx() && !still && bpm > 0.0 => {
+            fx::beat_pulse(((s.last_t - first).as_secs() * bpm / 60.0) as f32)
+        }
+        _ => 0.0,
+    };
     for mut t in q.p4().iter_mut() {
         **t = match &s.phase {
             Phase::Countdown { wall, dur_s, hold: true, .. } => format!("{}", (dur_s - wall.elapsed().as_secs_f64()).ceil().max(1.0) as u32),
@@ -573,6 +644,30 @@ fn hud(
     let dur = s.req.map.duration.0.max(1) as f32;
     for mut n in &mut prog { n.width = percent(((s.last_t.0 as f32 / dur) * 100.0).clamp(0.0, 100.0)) }
     for (mut n, mut bg) in &mut life { n.height = percent(sc.life as f32); bg.0 = if sc.life < 25.0 { DANGER } else { TEXT_DIM } }
+}
+
+/// Luz de cada carril: el haz y el halo se encienden al pulsar o acertar y se apagan solos.
+fn lane_fx(
+    time: Res<Time>, accent: Res<fx::Accent>, gfx: Res<Gfx>, mut s: ResMut<Session>, mut mats: ResMut<Assets<ColorMaterial>>,
+    mut beams: Query<(&LaneBeam, &mut Visibility), Without<LaneGlow>>,
+    mut glows: Query<(&LaneGlow, &mut Visibility, &mut Transform), Without<LaneBeam>>,
+) {
+    let dt = time.delta_secs();
+    let tint = accent.current.mix(&WHITE, 0.5);
+    let r = NOTE_BASE_R * s.scale;
+    let levels = s.lane_level;
+    for (i, lv) in levels.iter().enumerate() {
+        if let Some(mut m) = mats.get_mut(&gfx.beam[i]) { m.color = tint.with_alpha(0.34 * lv * lv) }
+        if let Some(mut m) = mats.get_mut(&gfx.glow[i]) { m.color = tint.with_alpha(0.6 * lv) }
+        s.lane_level[i] = (lv - dt * 5.0).max(0.0);
+    }
+    let vis = |lv: f32| if lv > 0.01 { Visibility::Visible } else { Visibility::Hidden };
+    for (b, mut v) in &mut beams { let w = vis(levels[b.0]); if *v != w { *v = w } }
+    for (g, mut v, mut t) in &mut glows {
+        let w = vis(levels[g.0]);
+        if *v != w { *v = w }
+        t.scale = Vec3::new(r * (2.3 + 0.5 * levels[g.0]), r * (2.3 + 0.5 * levels[g.0]), 1.0);
+    }
 }
 
 fn effects(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut Flash, &mut Transform, &MeshMaterial2d<ColorMaterial>)>, s: Res<Session>, mut mats: ResMut<Assets<ColorMaterial>>) {

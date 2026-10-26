@@ -1,5 +1,5 @@
 //! Importación y análisis de una canción (se ejecuta en un hilo de fondo).
-//! decodificar → huella → analizar → generar 4 dificultades → guardar mapas JSON.
+//! decodificar → huella → analizar → generar las dificultades → guardar mapas JSON.
 
 use crate::settings::Settings;
 use nocturne_core::analysis::analyze;
@@ -44,7 +44,7 @@ pub fn probe(path: &Path, cancel: &AtomicBool) -> Result<Probed> {
     Ok(Probed { audio, fingerprint, title })
 }
 
-/// Borra los mapas de una canción (los cuatro niveles); los que no existan se ignoran.
+/// Borra los mapas de una canción (todos los niveles); los que no existan se ignoran.
 pub fn delete_maps(maps_dir: &Path, fp: &str) {
     for d in Difficulty::ALL { let _ = std::fs::remove_file(map_path(maps_dir, fp, d)); }
 }
@@ -59,27 +59,34 @@ pub fn audio_files_in(dir: &Path) -> Vec<PathBuf> {
 
 /// Datos de un mapa que muestra la biblioteca.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MapSummary { pub notes: usize, pub holds: usize, pub nps: f64, pub edited: bool }
+pub struct MapSummary { pub notes: usize, pub holds: usize, pub nps: f64, pub rating: f64, pub edited: bool }
 
 pub fn summarize(m: &Beatmap) -> MapSummary {
-    MapSummary { notes: m.notes.len(), holds: m.notes.iter().filter(|n| n.is_hold()).count(), nps: m.notes_per_second(), edited: m.edited_manually }
+    MapSummary { notes: m.notes.len(), holds: m.notes.iter().filter(|n| n.is_hold()).count(), nps: m.notes_per_second(), rating: m.rating(), edited: m.edited_manually }
 }
 
-pub struct Outcome { pub bpm: Option<f64>, pub notes: [usize; 4], pub warnings: Vec<String>, pub elapsed_ms: u128 }
+/// `notes`: número de notas generadas por dificultad, en el orden de `Difficulty::ALL`.
+pub struct Outcome { pub bpm: Option<f64>, pub notes: Vec<usize>, pub warnings: Vec<String>, pub elapsed_ms: u128 }
 
-/// Fase lenta: análisis y generación. `progress(fracción, etapa)`.
-pub fn analyze_and_generate(p: &Probed, artist: &str, s: &Settings, maps_dir: &Path, cancel: &AtomicBool,
+/// Fase lenta: análisis y generación. `progress(fracción, etapa)`. Con `keep_edited`, un mapa que ya
+/// existe y fue editado a mano no se sobrescribe (se avisa); sirve para generar solo los niveles que faltan.
+pub fn analyze_and_generate(p: &Probed, artist: &str, s: &Settings, maps_dir: &Path, keep_edited: bool, cancel: &AtomicBool,
                             progress: &mut dyn FnMut(f32, &'static str)) -> Result<Outcome> {
     let an = analyze(&p.audio, &s.analysis_params(), cancel, progress)?;
     if cancel.load(std::sync::atomic::Ordering::Relaxed) { return Err(Error::Cancelled) }
     let meta = Meta { title: p.title.clone(), artist: artist.into(), fingerprint: p.fingerprint.clone() };
     let opts = GenOptions { holds: s.generate_holds, density_scale: s.density_scale };
-    let mut notes = [0; 4];
-    for (i, m) in generate_all(&an, &meta, &opts).into_iter().enumerate() {
-        notes[i] = m.notes.len();
+    let mut notes = vec![];
+    let mut warnings = an.warnings.clone();
+    for m in generate_all(&an, &meta, &opts) {
+        if let Some(old) = keep_edited.then(|| load_map(maps_dir, &p.fingerprint, m.difficulty).ok()).flatten().filter(|o| o.edited_manually) {
+            warnings.push(format!("{}: se conservan tus ediciones", m.difficulty.label()));
+            notes.push(old.notes.len());
+            continue;
+        }
+        notes.push(m.notes.len());
         save_map(maps_dir, &m)?;
     }
-    let mut warnings = an.warnings.clone();
     if notes.iter().all(|n| *n == 0) { warnings.push("no se generó ninguna nota: la pista no tiene ritmo detectable".into()) }
     Ok(Outcome { bpm: an.tempo.as_ref().map(|t| t.bpm), notes, warnings, elapsed_ms: an.stats.elapsed_ms })
 }
@@ -100,7 +107,7 @@ pub fn import_blocking(db: &crate::db::Db, path: &Path, s: &Settings, maps_dir: 
         None => db.add_song(&p.fingerprint, &path.to_string_lossy(), &p.title, "", p.audio.duration().0 / 1000)
             .map_err(|e| Error::InvalidBeatmap(format!("base de datos: {e}")))?,
     };
-    match analyze_and_generate(&p, "", s, maps_dir, &cancel, &mut |_, _| {}) {
+    match analyze_and_generate(&p, "", s, maps_dir, true, &cancel, &mut |_, _| {}) {
         Ok(out) => { let _ = db.set_status(id, Status::Ready, None, out.bpm); }
         Err(e) => { let _ = db.set_status(id, Status::Failed, Some(&e.to_string()), None); return Err(e) }
     }
@@ -124,14 +131,43 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let p = probe(&wav, &cancel).unwrap();
         assert_eq!(p.title, "mi cancion");
-        let out = analyze_and_generate(&p, "", &Settings::default(), &dir.join("maps"), &cancel, &mut |_, _| {}).unwrap();
-        assert!(out.notes.windows(2).all(|w| w[0] <= w[1]) && out.notes[0] < out.notes[3], "{:?}", out.notes);
+        let out = analyze_and_generate(&p, "", &Settings::default(), &dir.join("maps"), false, &cancel, &mut |_, _| {}).unwrap();
+        assert_eq!(out.notes.len(), Difficulty::ALL.len());
+        assert!(out.notes.windows(2).all(|w| w[0] <= w[1]) && out.notes[0] < *out.notes.last().unwrap(), "{:?}", out.notes);
         for d in Difficulty::ALL {
             let m = load_map(&dir.join("maps"), &p.fingerprint, d).unwrap();
             assert_eq!(m.difficulty, d);
         }
         // Mismo audio → misma huella (detección de duplicados).
         assert_eq!(probe(&wav, &cancel).unwrap().fingerprint, p.fingerprint);
+    }
+    #[test]
+    fn regenerating_can_keep_manual_edits() {
+        let dir = std::env::temp_dir().join(format!("nocturne-imp3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (mut t, _) = drum_pattern(44100, 120.0, 1.0, 48, 2.0);
+        t.normalize_peak(0.9);
+        let wav = dir.join("c.wav");
+        write_wav(&wav, &t.samples, 44100, 1).unwrap();
+        let cancel = AtomicBool::new(false);
+        let p = probe(&wav, &cancel).unwrap();
+        let maps = dir.join("maps");
+        analyze_and_generate(&p, "", &Settings::default(), &maps, false, &cancel, &mut |_, _| {}).unwrap();
+        // El jugador edita el mapa Hard a mano.
+        let mut hard = load_map(&maps, &p.fingerprint, Difficulty::Hard).unwrap();
+        hard.edited_manually = true;
+        hard.notes.truncate(3);
+        save_map(&maps, &hard).unwrap();
+        // Regenerar «solo lo que falta» respeta la edición y avisa…
+        let out = analyze_and_generate(&p, "", &Settings::default(), &maps, true, &cancel, &mut |_, _| {}).unwrap();
+        assert_eq!(load_map(&maps, &p.fingerprint, Difficulty::Hard).unwrap().notes.len(), 3);
+        assert!(out.warnings.iter().any(|w| w.starts_with("Hard:")), "{:?}", out.warnings);
+        assert_eq!(out.notes.len(), Difficulty::ALL.len(), "el orden de `notes` sigue el de Difficulty::ALL");
+        assert_eq!(out.notes[Difficulty::Hard as usize], 3);
+        // …y una reanálisis explícito (ya confirmado por el usuario) la sustituye.
+        analyze_and_generate(&p, "", &Settings::default(), &maps, false, &cancel, &mut |_, _| {}).unwrap();
+        assert!(load_map(&maps, &p.fingerprint, Difficulty::Hard).unwrap().notes.len() > 3);
     }
     #[test]
     fn candidates_by_extension() {
@@ -163,7 +199,7 @@ mod tests {
         let m = load_map(&maps, &song.fingerprint, Difficulty::Hard).unwrap();
         let sum = summarize(&m);
         assert_eq!(sum.notes, m.notes.len());
-        assert!(!sum.edited);
+        assert!(!sum.edited && sum.rating > 0.0);
 
         delete_maps(&maps, &song.fingerprint);
         assert!(load_map(&maps, &song.fingerprint, Difficulty::Hard).is_err());

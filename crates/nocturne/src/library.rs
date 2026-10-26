@@ -7,6 +7,7 @@
 
 use crate::app::{AppDb, ReturnTo, Screen};
 use crate::db::{Db, ScoreRow, Song, Status};
+use crate::fx;
 use crate::game::PlayRequest;
 use crate::import::{self, MapSummary};
 use crate::jobs::{Jobs, NoticeKind};
@@ -130,12 +131,14 @@ pub struct Library {
     mode: Mode,
     browser: Browser,
     last_dir: Option<PathBuf>,
+    /// La primera construcción tras entrar anima la aparición; las siguientes (cada cambio) no.
+    first: bool,
 }
 
 impl Default for Library {
     fn default() -> Self {
-        Library { songs: vec![], selected: 0, scroll: 0, diff: 1, info: vec![DiffInfo::default(); 4], sig: u64::MAX, dirty: true,
-            mode: Mode::List, browser: Browser::default(), last_dir: None }
+        Library { songs: vec![], selected: 0, scroll: 0, diff: 1, info: vec![DiffInfo::default(); Difficulty::ALL.len()], sig: u64::MAX, dirty: true,
+            mode: Mode::List, browser: Browser::default(), last_dir: None, first: true }
     }
 }
 
@@ -149,7 +152,7 @@ impl Library {
     }
 
     fn load_info(&mut self, db: &Db) {
-        self.info = vec![DiffInfo::default(); 4];
+        self.info = vec![DiffInfo::default(); Difficulty::ALL.len()];
         let Some(s) = self.songs.get(self.selected) else { return };
         if s.status != Status::Ready { return }
         for (i, d) in Difficulty::ALL.iter().enumerate() {
@@ -183,12 +186,13 @@ impl Library {
 pub fn plugin(app: &mut App) {
     app.init_resource::<Library>()
         .add_systems(OnEnter(Screen::Library), enter)
-        .add_systems(Update, (input, refresh, render).chain().run_if(in_state(Screen::Library)))
+        .add_systems(Update, (input, refresh, sync_accent, render).chain().run_if(in_state(Screen::Library)))
         .add_systems(Update, drop_files);
 }
 
 fn enter(mut lib: ResMut<Library>, db: Res<AppDb>) {
     lib.mode = Mode::List;
+    lib.first = true;
     if let Ok(db) = db.0.lock() { lib.reload(&db) }
 }
 
@@ -196,6 +200,11 @@ fn enter(mut lib: ResMut<Library>, db: Res<AppDb>) {
 fn jobs_signature(jobs: &Jobs) -> u64 {
     let p: u64 = jobs.active.iter().map(|j| (j.progress * 100.0) as u64 + 1000).sum();
     (jobs.generation as u64) << 32 ^ p ^ ((jobs.queued() as u64) << 20)
+}
+
+/// El fondo toma el color de acento de la canción seleccionada.
+fn sync_accent(lib: Res<Library>, mut accent: ResMut<fx::Accent>) {
+    accent.target = lib.current().map_or(fx::Accent::default().target, |s| fx::accent_for(&s.fingerprint));
 }
 
 fn refresh(mut lib: ResMut<Library>, jobs: Res<Jobs>, db: Res<AppDb>) {
@@ -300,7 +309,7 @@ fn input(
                 if clicks.take(id) { acts.push(a) }
             }
             while let Some(i) = clicks.take_range(ROW_BASE, VISIBLE_ROWS as u32) { acts.push(Act::SelectRow(i as usize)) }
-            while let Some(i) = clicks.take_range(DIFF_BASE, 4) { acts.push(Act::SelectDiff(i as usize)) }
+            while let Some(i) = clicks.take_range(DIFF_BASE, Difficulty::ALL.len() as u32) { acts.push(Act::SelectDiff(i as usize)) }
         }
         Mode::Confirm(_) => {
             if confirm || pressed(KeyCode::KeyY) { acts.push(Act::Yes) }
@@ -341,7 +350,7 @@ fn input(
                 let i = lib.scroll + vi;
                 if i == lib.selected { play(&mut lib, &mut jobs, &mut commands, &mut next) } else { lib.select(i, &db) }
             }
-            Act::Diff(d) => { lib.diff = (lib.diff as isize + d).clamp(0, 3) as usize; lib.dirty = true }
+            Act::Diff(d) => { lib.diff = (lib.diff as isize + d).clamp(0, Difficulty::ALL.len() as isize - 1) as usize; lib.dirty = true }
             Act::SelectDiff(d) => {
                 if d == lib.diff { play(&mut lib, &mut jobs, &mut commands, &mut next) } else { lib.diff = d; lib.dirty = true }
             }
@@ -489,19 +498,24 @@ fn fmt_size(b: u64) -> String {
 fn render(mut commands: Commands, mut lib: ResMut<Library>, fonts: Res<Fonts>, jobs: Res<Jobs>, roots: Query<Entity, With<LibRoot>>) {
     if !lib.dirty { return }
     lib.dirty = false;
+    let first = std::mem::take(&mut lib.first);
     for r in &roots { commands.entity(r).despawn() }
     let lib = &*lib;
     commands.spawn((DespawnOnExit(Screen::Library), LibRoot,
         Node { flex_direction: FlexDirection::Column, padding: UiRect::new(px(96), px(96), px(64), px(40)), row_gap: px(28), ..ui::full_screen_root() }))
         .with_children(|root| {
             // Cabecera
-            root.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::FlexEnd, width: percent(100), ..default() }).with_children(|h| {
+            let mut head = root.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::FlexEnd, width: percent(100), ..default() });
+            if first { head.insert(fx::appear(0.0, Vec2::new(-30.0, 0.0))); }
+            head.with_children(|h| {
                 h.spawn(ui::spaced(&fonts, "BIBLIOTECA", 38.0, TEXT, Weight::Light, 10.0));
                 let n = lib.songs.len();
                 h.spawn(ui::text(&fonts, match n { 0 => "sin canciones".to_string(), 1 => "1 canción".to_string(), n => format!("{n} canciones") }, 20.0, TEXT_DIM, Weight::Regular));
             });
-            if lib.songs.is_empty() { empty_state(root, &fonts) } else { body(root, lib, &fonts, &jobs) }
-            footer(root, lib, &fonts, &jobs);
+            if lib.songs.is_empty() { empty_state(root, &fonts) } else { body(root, lib, &fonts, &jobs, first) }
+            let mut foot = root.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(14), width: percent(100), ..default() });
+            if first { foot.insert(fx::appear(0.3, Vec2::new(0.0, 20.0))); }
+            foot.with_children(|f| footer(f, lib, &fonts, &jobs));
             match lib.mode {
                 Mode::Browser => browser_modal(root, lib, &fonts),
                 Mode::Confirm(c) => confirm_modal(root, lib, c, &fonts),
@@ -513,17 +527,19 @@ fn render(mut commands: Commands, mut lib: ResMut<Library>, fonts: Res<Fonts>, j
 fn empty_state(root: &mut ChildSpawnerCommands, fonts: &Fonts) {
     root.spawn(Node { flex_grow: 1.0, flex_direction: FlexDirection::Column, justify_content: JustifyContent::Center, row_gap: px(14), padding: UiRect::left(px(8)), ..default() }).with_children(|c| {
         c.spawn(ui::text(fonts, "Tu biblioteca está vacía", 52.0, TEXT, Weight::Light));
-        c.spawn(ui::text(fonts, "Importa una canción y Nocturne generará cuatro mapas de ritmo a partir de ella.", 24.0, TEXT_DIM, Weight::Regular));
+        c.spawn(ui::text(fonts, "Importa una canción y Nocturne generará seis mapas de ritmo, de Easy a Extreme, a partir de ella.", 24.0, TEXT_DIM, Weight::Regular));
         c.spawn(ui::text(fonts, "Pulsa I para elegir un archivo, o arrastra uno (o una carpeta) a esta ventana.", 24.0, TEXT_DIM, Weight::Regular));
         c.spawn(ui::text(fonts, "Formatos: MP3, WAV, FLAC, OGG, M4A/AAC, y la pista de audio de MP4/MOV.", 18.0, alpha(TEXT_DIM, 0.7), Weight::Regular));
     });
 }
 
 
-fn body(root: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts, jobs: &Jobs) {
+fn body(root: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts, jobs: &Jobs, first: bool) {
     root.spawn(Node { flex_grow: 1.0, column_gap: px(72), width: percent(100), ..default() }).with_children(|body| {
         // Lista
-        body.spawn(Node { flex_direction: FlexDirection::Column, width: px(900), row_gap: px(4), ..default() }).with_children(|list| {
+        let mut list_e = body.spawn(Node { flex_direction: FlexDirection::Column, width: px(900), row_gap: px(4), ..default() });
+        if first { list_e.insert(fx::appear(0.1, Vec2::new(-40.0, 0.0))); }
+        list_e.with_children(|list| {
             for (vi, song) in lib.songs.iter().enumerate().skip(lib.scroll).take(VISIBLE_ROWS) {
                 let sel = vi == lib.selected;
                 let (status, status_col) = status_of(song, jobs);
@@ -531,12 +547,15 @@ fn body(root: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts, jobs: &Jo
                 list.spawn((ui::click(ROW_BASE + (vi - lib.scroll) as u32),
                     Node { width: percent(100), height: px(ROW_H), padding: UiRect::axes(px(24), px(0)), align_items: AlignItems::Center,
                            justify_content: JustifyContent::SpaceBetween, border: UiRect::left(px(3)), ..default() },
-                    BackgroundColor(bg), BorderColor::all(if sel { WHITE } else { Color::NONE }),
+                    BackgroundColor(bg), BorderColor::all(if sel { fx::accent_for(&song.fingerprint) } else { Color::NONE }),
                     HoverTint { normal: bg, hover: if sel { SURFACE_2 } else { SURFACE } }))
                     .with_children(|r| {
-                        r.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|c| {
-                            c.spawn(ui::text(fonts, ui::ellipsize(&song.title, 40), 28.0, if sel { WHITE } else { TEXT }, Weight::Medium));
-                            c.spawn(ui::text(fonts, song_subtitle(song), 18.0, if song.status == Status::Failed { DANGER } else { TEXT_DIM }, Weight::Regular));
+                        r.spawn(Node { align_items: AlignItems::Center, column_gap: px(18), ..default() }).with_children(|left| {
+                            fx::spawn_cover(left, &song.fingerprint, 56.0);
+                            left.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|c| {
+                                c.spawn(ui::text(fonts, ui::ellipsize(&song.title, 36), 28.0, if sel { WHITE } else { TEXT }, Weight::Medium));
+                                c.spawn(ui::text(fonts, song_subtitle(song), 18.0, if song.status == Status::Failed { DANGER } else { TEXT_DIM }, Weight::Regular));
+                            });
                         });
                         r.spawn(ui::text(fonts, status, 18.0, status_col, Weight::Regular));
                     });
@@ -547,21 +566,28 @@ fn body(root: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts, jobs: &Jo
             }
         });
         // Detalle
-        if let Some(song) = lib.current() { detail(body, lib, song, fonts, jobs) }
+        if let Some(song) = lib.current() { detail(body, lib, song, fonts, jobs, first) }
     });
 }
 
-fn detail(body: &mut ChildSpawnerCommands, lib: &Library, song: &Song, fonts: &Fonts, jobs: &Jobs) {
-    body.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, row_gap: px(10), padding: UiRect::top(px(8)), ..default() }).with_children(|d| {
-        d.spawn(ui::text(fonts, ui::ellipsize(&song.title, 30), 46.0, TEXT, Weight::Medium));
-        d.spawn(ui::text(fonts, song_subtitle(song), 20.0, TEXT_DIM, Weight::Regular));
-        let t0 = crate::db::now();
-        let history = match song.last_played {
-            Some(p) => format!("añadida {} · jugada {}", crate::stats::ago(t0, song.added), crate::stats::ago(t0, p)),
-            None => format!("añadida {} · aún sin jugar", crate::stats::ago(t0, song.added)),
-        };
-        d.spawn(ui::text(fonts, history, 16.0, alpha(TEXT_DIM, 0.8), Weight::Regular));
-        d.spawn(ui::gap(14.0));
+fn detail(body: &mut ChildSpawnerCommands, lib: &Library, song: &Song, fonts: &Fonts, jobs: &Jobs, first: bool) {
+    let mut panel = body.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, row_gap: px(10), padding: UiRect::top(px(8)), ..default() });
+    if first { panel.insert(fx::appear(0.2, Vec2::new(40.0, 0.0))); }
+    panel.with_children(|d| {
+        d.spawn(Node { align_items: AlignItems::Center, column_gap: px(24), ..default() }).with_children(|head| {
+            fx::spawn_cover(head, &song.fingerprint, 132.0);
+            head.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }).with_children(|t| {
+                t.spawn(ui::text(fonts, ui::ellipsize(&song.title, 24), 46.0, TEXT, Weight::Medium));
+                t.spawn(ui::text(fonts, song_subtitle(song), 20.0, TEXT_DIM, Weight::Regular));
+                let t0 = crate::db::now();
+                let history = match song.last_played {
+                    Some(p) => format!("añadida {} · jugada {}", crate::stats::ago(t0, song.added), crate::stats::ago(t0, p)),
+                    None => format!("añadida {} · aún sin jugar", crate::stats::ago(t0, song.added)),
+                };
+                t.spawn(ui::text(fonts, history, 16.0, alpha(TEXT_DIM, 0.8), Weight::Regular));
+            });
+        });
+        d.spawn(ui::gap(6.0));
         match (song.status, jobs.progress_of(song.id)) {
             (_, Some((p, stage))) => {
                 d.spawn(ui::text(fonts, if stage == "en cola" { "En cola de análisis".to_string() } else { format!("Analizando · {stage}") }, 24.0, TEXT, Weight::Regular));
@@ -576,17 +602,17 @@ fn detail(body: &mut ChildSpawnerCommands, lib: &Library, song: &Song, fonts: &F
                     let info = &lib.info[i];
                     let bg = if sel { SURFACE_2 } else { Color::NONE };
                     d.spawn((ui::click(DIFF_BASE + i as u32),
-                        Node { width: px(780), padding: UiRect::axes(px(22), px(14)), align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween,
+                        Node { width: px(780), padding: UiRect::axes(px(22), px(9)), align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween,
                                border: UiRect::left(px(3)), ..default() },
-                        BackgroundColor(bg), BorderColor::all(if sel { WHITE } else { Color::NONE }),
+                        BackgroundColor(bg), BorderColor::all(if sel { fx::accent_for(&song.fingerprint) } else { Color::NONE }),
                         HoverTint { normal: bg, hover: if sel { SURFACE_2 } else { SURFACE } }))
                         .with_children(|r| {
                             r.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|c| {
                                 c.spawn(ui::text(fonts, diff.label(), 30.0, if sel { WHITE } else { TEXT_DIM }, Weight::Regular));
                                 let line = match &info.summary {
-                                    Some(s) => format!("{} notas · {:.1} n/s{}{}", s.notes, s.nps,
+                                    Some(s) => format!("nivel {:.1} · {} notas · {:.1} n/s{}{}", s.rating, s.notes, s.nps,
                                         if s.holds > 0 { format!(" · {} largas", s.holds) } else { String::new() }, if s.edited { " · editado" } else { "" }),
-                                    None => "mapa no disponible".to_string(),
+                                    None => "no generado: pulsa R para crear este nivel".to_string(),
                                 };
                                 c.spawn(ui::text(fonts, line, 17.0, TEXT_DIM, Weight::Regular));
                             });
@@ -616,8 +642,8 @@ fn detail(body: &mut ChildSpawnerCommands, lib: &Library, song: &Song, fonts: &F
     });
 }
 
-fn footer(root: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts, jobs: &Jobs) {
-    root.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(14), width: percent(100), ..default() }).with_children(|f| {
+fn footer(f: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts, jobs: &Jobs) {
+    {
         f.spawn((ui::text(fonts, jobs.summary().unwrap_or_default(), 18.0, TEXT, Weight::Regular), Node { height: px(24), ..default() }));
         f.spawn(ui::divider(percent(100)));
         f.spawn(Node { column_gap: px(14), align_items: AlignItems::Center, ..default() }).with_children(|b| {
@@ -632,7 +658,7 @@ fn footer(root: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts, jobs: &
             b.spawn(ui::text(fonts, "↑↓ canción   ←→ dificultad", 16.0, alpha(TEXT_DIM, 0.8), Weight::Regular));
             b.spawn(ui::pill(fonts, ACT_BACK, "Volver · Esc"));
         });
-    });
+    }
 }
 
 fn browser_modal(root: &mut ChildSpawnerCommands, lib: &Library, fonts: &Fonts) {
@@ -680,7 +706,7 @@ fn confirm_modal(root: &mut ChildSpawnerCommands, lib: &Library, c: Confirm, fon
         Confirm::Delete => (format!("¿Eliminar «{}»?", ui::ellipsize(&title, 36)),
             "Se borrarán sus mapas y su lugar en la biblioteca. El archivo de audio original no se toca; tus puntuaciones se conservan en las estadísticas.", "Eliminar · Intro"),
         Confirm::Reanalyze => (format!("¿Reanalizar «{}»?", ui::ellipsize(&title, 36)),
-            "Algún mapa de esta canción tiene ediciones manuales. Al reanalizar se generan los cuatro mapas de nuevo y esas ediciones se perderán.", "Reanalizar · Intro"),
+            "Algún mapa de esta canción tiene ediciones manuales. Al reanalizar se generan los seis mapas de nuevo y esas ediciones se perderán.", "Reanalizar · Intro"),
     };
     root.spawn((ui::modal_backdrop(), Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..ui::full_screen_root() })).with_children(|m| {
         m.spawn((Node { width: px(780), flex_direction: FlexDirection::Column, row_gap: px(16), padding: UiRect::all(px(40)), border: UiRect::all(px(1)), ..default() },

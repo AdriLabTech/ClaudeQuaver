@@ -185,12 +185,22 @@ pub fn menu_input(
 /// Resalta el elemento seleccionado.
 pub fn menu_visuals(
     nav: Res<MenuNav>,
+    time: Res<Time>,
+    mut slide: Query<(&MenuItem, &mut UiTransform), Without<crate::fx::Appear>>,
     items: Query<(&MenuItem, &Children)>,
     kids: Query<&Children>,
     mut markers: Query<&mut BackgroundColor, With<Marker>>,
     mut labels: Query<&mut TextColor, (With<ItemLabel>, Without<ItemSub>)>,
     mut subs: Query<&mut TextColor, (With<ItemSub>, Without<ItemLabel>)>,
 ) {
+    // El elemento elegido se desplaza unos píxeles a la derecha, con suavidad.
+    let k = 1.0 - (-16.0 * time.delta_secs()).exp();
+    for (it, mut tf) in &mut slide {
+        let cur = if let Val::Px(x) = tf.translation.x { x } else { 0.0 };
+        let target = if it.order == nav.selected { 10.0 } else { 0.0 };
+        let next = cur + (target - cur) * k;
+        if (next - cur).abs() > 0.01 { tf.translation = Val2::px(next, 0.0) }
+    }
     for (it, children) in &items {
         let sel = it.order == nav.selected;
         for c in children.iter() {

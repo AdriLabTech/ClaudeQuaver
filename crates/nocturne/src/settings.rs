@@ -56,6 +56,10 @@ pub struct Settings {
     /// Modo minimalista/competitivo: sin anillos al acertar, sin resalte de pulsación, sin
     /// desvanecidos ni animaciones. La información (juicios, combo, vida) no se toca.
     pub minimal_visuals: bool,
+    /// Resplandor (bloom) alrededor de lo más brillante: notas, chispas.
+    pub glow: bool,
+    /// Fondo vivo: luz ambiental y estrellas que reaccionan a la música.
+    pub animated_background: bool,
     pub show_diagnostics: bool,
     // Análisis
     pub onset_sensitivity: f32,
@@ -75,7 +79,7 @@ impl Default for Settings {
             profiles: vec![KeyProfile { name: "Estándar".into(), keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK] }],
             active_profile: 0,
             music_volume: 0.7, sfx_volume: 0.5, audio_device: None, global_offset_ms: 0.0,
-            fullscreen: false, vsync: true, fps_limit: 0, ui_scale: 1.0, reduce_motion: false, minimal_visuals: false, show_diagnostics: false,
+            fullscreen: false, vsync: true, fps_limit: 0, ui_scale: 1.0, reduce_motion: false, minimal_visuals: false, glow: true, animated_background: true, show_diagnostics: false,
             onset_sensitivity: 0.5, generate_holds: true, density_scale: 1.0,
             warnings: vec![],
         }
@@ -88,6 +92,10 @@ impl Settings {
 
     /// ¿Animaciones atenuadas o ausentes? (ajuste propio o modo minimalista).
     pub fn motion_reduced(&self) -> bool { self.reduce_motion || self.minimal_visuals }
+    /// ¿Resplandor en la cámara? (Lo anula el modo minimalista.)
+    pub fn glow_on(&self) -> bool { self.glow && !self.minimal_visuals }
+    /// ¿Fondo animado? (Lo anula el modo minimalista.)
+    pub fn background_fx(&self) -> bool { self.animated_background && !self.minimal_visuals }
     /// ¿Anillo al acertar cada nota?
     pub fn hit_effects(&self) -> bool { self.show_hit_effects && !self.minimal_visuals }
     /// ¿Se ilumina el círculo fijo mientras se mantiene la tecla?
@@ -120,7 +128,7 @@ impl Settings {
         clamp(&mut w, "offset global", &mut self.global_offset_ms, -300.0, 300.0, 0.0);
         clamp(&mut w, "escala de interfaz", &mut self.ui_scale, 0.7, 1.6, d.ui_scale);
         clamp(&mut w, "sensibilidad", &mut self.onset_sensitivity, 0.0, 1.0, d.onset_sensitivity);
-        clamp(&mut w, "densidad", &mut self.density_scale, 0.5, 2.0, d.density_scale);
+        clamp(&mut w, "densidad", &mut self.density_scale, 0.5, 3.0, d.density_scale);
         if self.fps_limit != 0 && !(30..=1000).contains(&self.fps_limit) {
             w.push(format!("límite de FPS {} no válido, desactivado", self.fps_limit));
             self.fps_limit = 0;
@@ -267,9 +275,16 @@ mod tests {
     #[test]
     fn minimal_mode_switches_off_decorations_but_not_information() {
         let mut s = Settings::default();
-        assert!(s.hit_effects() && s.press_highlight() && !s.motion_reduced(), "por defecto hay efectos");
+        assert!(s.hit_effects() && s.press_highlight() && !s.motion_reduced() && s.glow_on() && s.background_fx(), "por defecto hay efectos");
         s.minimal_visuals = true;
-        assert!(!s.hit_effects() && !s.press_highlight() && s.motion_reduced());
+        assert!(!s.hit_effects() && !s.press_highlight() && s.motion_reduced() && !s.glow_on() && !s.background_fx());
+        s.minimal_visuals = false;
+        s.glow = false;
+        s.animated_background = false;
+        assert!(!s.glow_on() && !s.background_fx(), "cada efecto tiene su propio interruptor");
+        s.glow = true;
+        s.animated_background = true;
+        s.minimal_visuals = true;
         assert!(s.show_judgement && s.show_life && s.show_progress, "los datos del HUD siguen su propio ajuste");
         s.minimal_visuals = false;
         s.show_hit_effects = false;

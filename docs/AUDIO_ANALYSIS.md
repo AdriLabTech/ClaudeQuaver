@@ -8,7 +8,7 @@ huella del audio y del instante).
 ```
 archivo → decodificar → huella → mono → STFT/bandas → flujo espectral → candidatos de onset
         → tempo (+ secciones) → beats → cuadrícula/subdivisión → patrones por compás
-        → segmentos de intensidad → eventos → generador (4 dificultades) → mapas JSON
+        → segmentos de intensidad → eventos → generador (6 dificultades) → mapas JSON
 ```
 
 ## 1. Decodificación (`decode.rs`)
@@ -56,26 +56,44 @@ cada sección (0 baja, 1 media, 2 alta).
 
 ## 6. Generación (`beatmap/generator.rs`)
 
-Las cuatro dificultades comparten la misma **importancia** por evento
+Las seis dificultades comparten la misma **importancia** por evento
 (`0,45·fuerza + 0,25·posición métrica + 0,15·banda + 0,15·regularidad`) y solo cambian las reglas,
 así que cada nivel es una simplificación reconocible del siguiente.
 
-| | Importancia mín. | Hueco mín. | Máx. notas/s | Subdivisiones | Acordes | Largas |
-|---|---|---|---|---|---|---|
-| Easy | 0,55 | 330 ms | 2,6 | pulso | no | no |
-| Normal | 0,42 | 210 ms | 4,6 | pulso, corchea | no | ≥ 600 ms, ≤ 8 % |
-| Hard | 0,30 | 130 ms | 7,0 | + semicorchea, tresillo | importancia ≥ 0,85 | ≥ 450 ms, ≤ 12 % |
-| Expert | 0,20 | 85 ms | 10,5 | igual | importancia ≥ 0,70 | ≥ 400 ms, ≤ 15 % |
+| | Importancia mín. | Hueco mín. | Eventos/s máx. | Débiles | Acordes | Largas | Relleno |
+|---|---|---|---|---|---|---|---|
+| Easy | 0,55 | 330 ms | 2,6 | no | no | no | no |
+| Normal | 0,42 | 210 ms | 4,6 | no | no | ≥ 600 ms, ≤ 8 % | no |
+| Hard | 0,28 | 120 ms | 7,5 | pulso y corchea | imp. ≥ 0,80, solo tiempo fuerte | ≥ 450 ms, ≤ 12 % | no |
+| Expert | 0,18 | 80 ms | 11 | cuadrícula | imp. ≥ 0,62 (pulso, corchea) | ≥ 400 ms, ≤ 15 % | no |
+| Master | 0,12 | 62 ms | 15 | cuadrícula | imp. ≥ 0,45 + manos de 3 (≥ 0,90) | ≥ 350 ms, ≤ 18 % | semicorcheas, huecos ≤ 1 pulso |
+| Extreme | 0,06 | 48 ms | 20 | cuadrícula | imp. ≥ 0,30, carriles contiguos + manos de 3 (≥ 0,75) | ≥ 300 ms, ≤ 22 % | semicorcheas, huecos ≤ 2 pulsos, salto cada 2 notas |
 
-1. **Selección**: por importancia descendente, respetando hueco mínimo y densidad en ventanas de 1 s
-   (multiplicada por el ajuste *densidad*). Las secciones suaves exigen algo más; las intensas, algo menos.
-2. **Notas largas**: solo donde la energía se mantiene (≥ −9 dB del pico tras el transitorio) el tiempo
+1. **Selección**: primero los golpes aceptados por importancia descendente, y después los *débiles*,
+   para que estos nunca desplacen a aquellos. Se respeta el hueco mínimo y la densidad: **en cualquier
+   ventana de 1 s** hay como mucho `eventos/s × ajuste de densidad` eventos (los acordes pueden añadir
+   hasta un 30 % más). Las secciones suaves exigen algo más; las intensas, algo menos.
+2. **Golpes débiles** (Hard en adelante): el detector marca como «bajo el umbral» los golpes mucho más
+   suaves que los más fuertes de la canción (hi-hats, shakers, arpegios). Se admiten solo si caen sobre una
+   subdivisión de la cuadrícula —que encajen en ella es la prueba de que son reales— y superan una fuerza mínima.
+   Master y Extreme admiten además golpes aceptados **fuera de cuadrícula** (swing, tempo mal estimado).
+3. **Relleno de cuadrícula** (Master y Extreme): semicorcheas que puentean los huecos entre notas ya elegidas,
+   solo donde ya hay actividad (≥ 2,5 o 1,5 notas/s en ±1,5 s) y fuera de silencios. **Es la única regla que no
+   parte de un golpe medido** y por eso solo se aplica si la cuadrícula explica el audio: confianza del tempo
+   ≥ 0,4 y al menos el 80 % de los golpes sobre la cuadrícula. Con un tempo dudoso se desactiva y el generador lo
+   anota en `repairs`.
+4. **Notas largas**: solo donde la energía se mantiene (≥ −9 dB del pico tras el transitorio) el tiempo
    mínimo, sin invadir el siguiente evento y nunca en la banda aguda.
-3. **Carriles**: se reutiliza el carril aprendido para el mismo patrón y posición del compás (repetición
-   musical); si no, se elige por coste (evitar repetir carril en notas rápidas, alternar manos, graves
-   al centro y agudos a los lados). Los acordes (solo en Hard/Expert) se limitan a pulsos fuertes y
-   separan los carriles al menos dos posiciones.
-4. **Validación**: lo que quede fuera de rango se elimina y se anota en `repairs`.
+5. **Carriles**: se reutiliza el carril aprendido para el mismo patrón y posición del compás (repetición
+   musical); si no, se elige por coste. Se evita repetir un carril usado en el evento anterior (un acorde ocupa
+   varios), se alterna de mano, y en pasajes rápidos se prefieren escaleras y trinos (carriles contiguos, misma
+   dirección). Los acordes separan los carriles al menos dos posiciones (uno en Extreme) y las manos de tres solo
+   salen en pulsos fuertes.
+6. **Validación**: lo que quede fuera de rango se elimina y se anota en `repairs`.
+
+El ajuste **Densidad** (Análisis) multiplica el tope de eventos por segundo de todos los niveles, de 0,5× a 3×.
+Más allá de la rejilla de semicorcheas de la canción no se inventan más notas: a 128 BPM, Extreme ronda las
+14–15 notas/s con picos de 19; en una canción de 180 BPM, las semicorcheas por sí solas ya son 12 notas/s.
 
 ## Qué es heurístico
 

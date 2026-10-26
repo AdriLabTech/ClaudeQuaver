@@ -18,7 +18,7 @@ fn back(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<Screen>>, mu
 const HOW: [&str; 4] = [
     "1. Importas una canción (MP3, WAV, FLAC, OGG, M4A/AAC o el audio de un vídeo).",
     "2. Nocturne mide el espectro, detecta los golpes, estima el tempo y la cuadrícula rítmica.",
-    "3. Genera cuatro mapas, de Easy a Expert, siempre iguales para el mismo audio.",
+    "3. Genera seis mapas, de Easy a Extreme, siempre iguales para el mismo audio.",
     "4. Juegas, y si algo no te convence lo corriges en el editor de mapas.",
 ];
 
@@ -51,7 +51,7 @@ fn build(mut commands: Commands, fonts: Res<Fonts>, audio: Res<Audio>, db: Res<A
         ("Audio", device),
         ("Formato de mapa", format!("v{} · analizador v{}", nocturne_core::beatmap::FORMAT_VERSION, nocturne_core::analysis::ANALYZER_VERSION)),
     ];
-    commands.spawn((DespawnOnExit(Screen::About),
+    commands.spawn((DespawnOnExit(Screen::About), crate::fx::appear(0.0, Vec2::new(0.0, 22.0)),
         Node { flex_direction: FlexDirection::Column, padding: UiRect::new(px(96), px(96), px(64), px(40)), row_gap: px(30), ..ui::full_screen_root() }))
         .with_children(|root| {
             root.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }).with_children(|h| {
