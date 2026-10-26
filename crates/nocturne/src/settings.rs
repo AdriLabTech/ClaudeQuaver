@@ -120,7 +120,7 @@ impl Settings {
         clamp(&mut w, "offset global", &mut self.global_offset_ms, -300.0, 300.0, 0.0);
         clamp(&mut w, "escala de interfaz", &mut self.ui_scale, 0.7, 1.6, d.ui_scale);
         clamp(&mut w, "sensibilidad", &mut self.onset_sensitivity, 0.0, 1.0, d.onset_sensitivity);
-        clamp(&mut w, "densidad", &mut self.density_scale, 0.5, 2.0, d.density_scale);
+        clamp(&mut w, "densidad", &mut self.density_scale, 0.5, 3.0, d.density_scale);
         if self.fps_limit != 0 && !(30..=1000).contains(&self.fps_limit) {
             w.push(format!("límite de FPS {} no válido, desactivado", self.fps_limit));
             self.fps_limit = 0;

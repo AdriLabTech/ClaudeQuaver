@@ -18,7 +18,7 @@ fn back(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<Screen>>, mu
 const HOW: [&str; 4] = [
     "1. Importas una canción (MP3, WAV, FLAC, OGG, M4A/AAC o el audio de un vídeo).",
     "2. Nocturne mide el espectro, detecta los golpes, estima el tempo y la cuadrícula rítmica.",
-    "3. Genera cuatro mapas, de Easy a Expert, siempre iguales para el mismo audio.",
+    "3. Genera seis mapas, de Easy a Extreme, siempre iguales para el mismo audio.",
     "4. Juegas, y si algo no te convence lo corriges en el editor de mapas.",
 ];
 

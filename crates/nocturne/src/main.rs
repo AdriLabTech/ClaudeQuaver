@@ -38,7 +38,7 @@ Uso: nocturne [opciones]
   --import <ruta>        analiza un archivo de audio o todos los de una carpeta (repetible)
   --play <archivo>       importa si hace falta (bloquea hasta terminar el análisis) y empieza a jugar
   --edit <archivo>       lo mismo, pero abre el mapa en el editor
-  --difficulty <nivel>   easy | normal | hard | expert (con --play o --edit; por defecto normal)
+  --difficulty <nivel>   easy | normal | hard | expert | master | extreme (con --play o --edit; por defecto normal)
   --screen <pantalla>    home | library | settings | stats | about | calibrate
   --demo                 mapa de demostración sin audio
   --autoplay             el autopiloto juega solo (verificación)

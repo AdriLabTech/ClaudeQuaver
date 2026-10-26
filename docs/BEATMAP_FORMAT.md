@@ -1,6 +1,6 @@
 # Formato de mapa (`format_version` 1)
 
-Cada canción tiene **cuatro mapas**, uno por dificultad, guardados como JSON legible en el
+Cada canción tiene **seis mapas**, uno por dificultad, guardados como JSON legible en el
 directorio de datos (`maps/<huella>.<dificultad>.json`, p. ej. `4928ef5b2d3e462a.hard.json`).
 La definición está en `crates/nocturne-core/src/beatmap/mod.rs`; este documento la describe.
 
@@ -17,12 +17,12 @@ une a su audio por `audio_fingerprint`.
 | `audio_fingerprint` | texto | FNV-1a de 64 bits (hex) de las muestras decodificadas, cuantizadas a 16 bits. Mismo audio → misma huella, aunque cambie el contenedor. |
 | `duration` | µs | Duración del audio. |
 | `music` | objeto | `bpm` (opcional), `bpm_confidence` (0..1), `bpm_candidates` (`[[bpm, puntuación]]`, hipótesis alternativas como BPM/2 o ×2) y `first_beat` (µs, opcional). |
-| `difficulty` | `Easy` \| `Normal` \| `Hard` \| `Expert` | Nivel. |
-| `parameters` | texto | Parámetros del generador legibles (`holds=true density_scale=1.00`). |
+| `difficulty` | `Easy` \| `Normal` \| `Hard` \| `Expert` \| `Master` \| `Extreme` | Nivel. Master y Extreme se añadieron sin subir `format_version`: un lector antiguo solo falla con esos dos mapas, no con los demás. |
+| `parameters` | texto | Parámetros del generador legibles (`holds=true density_scale=1.00 fill=325`; `fill` = notas de relleno de cuadrícula, solo en Master y Extreme). |
 | `notes` | lista | Ver más abajo. |
 | `song_offset_ms` | número | Desfase propio de la canción (ms). **Positivo = las notas llegan más tarde.** Se suma al ajuste global del jugador. Opcional; por defecto 0. |
 | `edited_manually` | booleano | `true` si el mapa pasó por el editor. Reanalizar la canción lo sobrescribe (la biblioteca pide confirmación). |
-| `repairs` | lista de textos | Eventos descartados por el generador (por ejemplo «sin carril libre»). |
+| `repairs` | lista de textos | Avisos del generador: eventos descartados («sin carril libre») o decisiones como «relleno de cuadrícula desactivado: el tempo no explica el audio». |
 
 Todos los instantes son **enteros en microsegundos** desde el inicio del audio (`Micros`). Se
 evita la coma flotante para que un mapa guardado y releído sea idéntico.
@@ -58,6 +58,14 @@ Al cargar un mapa se comprueba todo esto; si falla, el mapa se rechaza (no se «
 El editor (`nocturne_core::editor`) va más allá y exige un hueco mínimo de 30 ms entre notas del
 mismo carril y 120 ms de duración mínima para una nota larga; ninguna edición puede dejar un mapa
 inválido.
+
+## Nivel numérico
+
+El **nivel** que muestra la biblioteca no se guarda: se calcula al leer el mapa (`Beatmap::rating`). Es
+la densidad de los pasajes más difíciles —70 % la media del 15 % de ventanas de 2 s más densas, 30 % el
+pico— multiplicada por `1 + 0,6·(proporción de acordes) + 0,8·(proporción de repeticiones de menos de
+160 ms en un carril)`. No depende de la duración de la canción, así que sirve para comparar mapas de
+canciones distintas. Referencias: Easy ≈ 1–2, Normal ≈ 3, Hard ≈ 5, Expert ≈ 9, Master ≈ 13–16, Extreme ≈ 21–25.
 
 ## Evolución
 

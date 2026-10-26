@@ -2,11 +2,13 @@
 
 **Tu música, convertida en mapa de ritmo.** Nocturne es un juego de ritmo de cuatro carriles escrito
 en Rust (Bevy). Importas una canción, la analiza (tempo, golpes, compases, patrones) y genera
-automáticamente cuatro mapas —Easy, Normal, Hard y Expert—. Después juegas, miras tus estadísticas y,
+automáticamente seis mapas —Easy, Normal, Hard, Expert, Master y Extreme—. Después juegas, miras tus estadísticas y,
 si un mapa no te convence, lo corriges en el editor.
 
 * Pista limpia: cuatro círculos fijos y notas blancas lisas que caen hasta ellos. Sin líneas, sin letras.
 * Análisis determinista: el mismo audio produce siempre el mismo mapa.
+* Seis dificultades, de Easy (~1 nota/s) a **Extreme** (más de 14 notas/s sostenidas, con saltos, manos de tres
+  notas y *streams*), y un **nivel numérico** por mapa para compararlos entre canciones.
 * Todo local: biblioteca en SQLite, mapas en JSON, ajustes en JSON. Sin red.
 
 ## Instalación
@@ -89,7 +91,8 @@ Para probar sin instalar nada en cualquier distribución: `cargo run --release -
 3. `Esc` pausa. Al terminar ves tu nota, la distribución de errores (¿pulsas pronto o tarde?) y se guarda en
    las estadísticas.
 4. **Editar mapa** (`E`) abre el mapa en el editor.
-5. **Reanalizar** (`R`) regenera los cuatro mapas (por ejemplo tras subir la sensibilidad en Ajustes).
+5. **Reanalizar** (`R`) regenera los seis mapas (por ejemplo tras subir la sensibilidad en Ajustes, o para crear
+   los niveles Master y Extreme en canciones importadas con una versión anterior).
 
 ### Editor de mapas
 

@@ -134,7 +134,7 @@ pub struct Library {
 
 impl Default for Library {
     fn default() -> Self {
-        Library { songs: vec![], selected: 0, scroll: 0, diff: 1, info: vec![DiffInfo::default(); 4], sig: u64::MAX, dirty: true,
+        Library { songs: vec![], selected: 0, scroll: 0, diff: 1, info: vec![DiffInfo::default(); Difficulty::ALL.len()], sig: u64::MAX, dirty: true,
             mode: Mode::List, browser: Browser::default(), last_dir: None }
     }
 }
@@ -149,7 +149,7 @@ impl Library {
     }
 
     fn load_info(&mut self, db: &Db) {
-        self.info = vec![DiffInfo::default(); 4];
+        self.info = vec![DiffInfo::default(); Difficulty::ALL.len()];
         let Some(s) = self.songs.get(self.selected) else { return };
         if s.status != Status::Ready { return }
         for (i, d) in Difficulty::ALL.iter().enumerate() {
@@ -300,7 +300,7 @@ fn input(
                 if clicks.take(id) { acts.push(a) }
             }
             while let Some(i) = clicks.take_range(ROW_BASE, VISIBLE_ROWS as u32) { acts.push(Act::SelectRow(i as usize)) }
-            while let Some(i) = clicks.take_range(DIFF_BASE, 4) { acts.push(Act::SelectDiff(i as usize)) }
+            while let Some(i) = clicks.take_range(DIFF_BASE, Difficulty::ALL.len() as u32) { acts.push(Act::SelectDiff(i as usize)) }
         }
         Mode::Confirm(_) => {
             if confirm || pressed(KeyCode::KeyY) { acts.push(Act::Yes) }
@@ -341,7 +341,7 @@ fn input(
                 let i = lib.scroll + vi;
                 if i == lib.selected { play(&mut lib, &mut jobs, &mut commands, &mut next) } else { lib.select(i, &db) }
             }
-            Act::Diff(d) => { lib.diff = (lib.diff as isize + d).clamp(0, 3) as usize; lib.dirty = true }
+            Act::Diff(d) => { lib.diff = (lib.diff as isize + d).clamp(0, Difficulty::ALL.len() as isize - 1) as usize; lib.dirty = true }
             Act::SelectDiff(d) => {
                 if d == lib.diff { play(&mut lib, &mut jobs, &mut commands, &mut next) } else { lib.diff = d; lib.dirty = true }
             }
@@ -513,7 +513,7 @@ fn render(mut commands: Commands, mut lib: ResMut<Library>, fonts: Res<Fonts>, j
 fn empty_state(root: &mut ChildSpawnerCommands, fonts: &Fonts) {
     root.spawn(Node { flex_grow: 1.0, flex_direction: FlexDirection::Column, justify_content: JustifyContent::Center, row_gap: px(14), padding: UiRect::left(px(8)), ..default() }).with_children(|c| {
         c.spawn(ui::text(fonts, "Tu biblioteca está vacía", 52.0, TEXT, Weight::Light));
-        c.spawn(ui::text(fonts, "Importa una canción y Nocturne generará cuatro mapas de ritmo a partir de ella.", 24.0, TEXT_DIM, Weight::Regular));
+        c.spawn(ui::text(fonts, "Importa una canción y Nocturne generará seis mapas de ritmo, de Easy a Extreme, a partir de ella.", 24.0, TEXT_DIM, Weight::Regular));
         c.spawn(ui::text(fonts, "Pulsa I para elegir un archivo, o arrastra uno (o una carpeta) a esta ventana.", 24.0, TEXT_DIM, Weight::Regular));
         c.spawn(ui::text(fonts, "Formatos: MP3, WAV, FLAC, OGG, M4A/AAC, y la pista de audio de MP4/MOV.", 18.0, alpha(TEXT_DIM, 0.7), Weight::Regular));
     });
@@ -576,7 +576,7 @@ fn detail(body: &mut ChildSpawnerCommands, lib: &Library, song: &Song, fonts: &F
                     let info = &lib.info[i];
                     let bg = if sel { SURFACE_2 } else { Color::NONE };
                     d.spawn((ui::click(DIFF_BASE + i as u32),
-                        Node { width: px(780), padding: UiRect::axes(px(22), px(14)), align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween,
+                        Node { width: px(780), padding: UiRect::axes(px(22), px(9)), align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween,
                                border: UiRect::left(px(3)), ..default() },
                         BackgroundColor(bg), BorderColor::all(if sel { WHITE } else { Color::NONE }),
                         HoverTint { normal: bg, hover: if sel { SURFACE_2 } else { SURFACE } }))
@@ -584,9 +584,9 @@ fn detail(body: &mut ChildSpawnerCommands, lib: &Library, song: &Song, fonts: &F
                             r.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|c| {
                                 c.spawn(ui::text(fonts, diff.label(), 30.0, if sel { WHITE } else { TEXT_DIM }, Weight::Regular));
                                 let line = match &info.summary {
-                                    Some(s) => format!("{} notas · {:.1} n/s{}{}", s.notes, s.nps,
+                                    Some(s) => format!("nivel {:.1} · {} notas · {:.1} n/s{}{}", s.rating, s.notes, s.nps,
                                         if s.holds > 0 { format!(" · {} largas", s.holds) } else { String::new() }, if s.edited { " · editado" } else { "" }),
-                                    None => "mapa no disponible".to_string(),
+                                    None => "no generado: pulsa R para crear este nivel".to_string(),
                                 };
                                 c.spawn(ui::text(fonts, line, 17.0, TEXT_DIM, Weight::Regular));
                             });
@@ -680,7 +680,7 @@ fn confirm_modal(root: &mut ChildSpawnerCommands, lib: &Library, c: Confirm, fon
         Confirm::Delete => (format!("¿Eliminar «{}»?", ui::ellipsize(&title, 36)),
             "Se borrarán sus mapas y su lugar en la biblioteca. El archivo de audio original no se toca; tus puntuaciones se conservan en las estadísticas.", "Eliminar · Intro"),
         Confirm::Reanalyze => (format!("¿Reanalizar «{}»?", ui::ellipsize(&title, 36)),
-            "Algún mapa de esta canción tiene ediciones manuales. Al reanalizar se generan los cuatro mapas de nuevo y esas ediciones se perderán.", "Reanalizar · Intro"),
+            "Algún mapa de esta canción tiene ediciones manuales. Al reanalizar se generan los seis mapas de nuevo y esas ediciones se perderán.", "Reanalizar · Intro"),
     };
     root.spawn((ui::modal_backdrop(), Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..ui::full_screen_root() })).with_children(|m| {
         m.spawn((Node { width: px(780), flex_direction: FlexDirection::Column, row_gap: px(16), padding: UiRect::all(px(40)), border: UiRect::all(px(1)), ..default() },

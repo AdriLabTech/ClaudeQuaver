@@ -22,7 +22,7 @@ fn main() {
     let stem = Path::new(input).file_stem().and_then(|s| s.to_str()).unwrap_or("cancion").to_string();
     let meta = Meta { title: stem.clone(), artist: String::new(), fingerprint: fingerprint(&audio.samples) };
     for m in generate_all(&an, &meta, &GenOptions::default()) {
-        println!("{:>7}: {:4} notas, {:.1} nps, {} holds", m.difficulty.label(), m.notes.len(), m.notes_per_second(), m.notes.iter().filter(|n| n.is_hold()).count());
+        println!("{:>7}: {:4} notas, {:.1} nps, nivel {:.1}, {} holds, {} acordes", m.difficulty.label(), m.notes.len(), m.notes_per_second(), m.rating(), m.notes.iter().filter(|n| n.is_hold()).count(), { let mut t = std::collections::HashMap::new(); for n in &m.notes { *t.entry(n.time).or_insert(0usize) += 1 } t.values().filter(|c| **c > 1).count() });
         if let Some(out) = args.get(2) {
             std::fs::create_dir_all(out).unwrap();
             std::fs::write(Path::new(out).join(format!("{stem}.{}.json", m.difficulty.label().to_lowercase())), m.to_json().unwrap()).unwrap();

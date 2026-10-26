@@ -237,7 +237,7 @@ fn change(s: &mut Settings, st: &mut SettingsUi, f: Field, dir: i8, fast: bool, 
         ReduceMotion => toggle(&mut s.reduce_motion), Diagnostics => toggle(&mut s.show_diagnostics),
         Sensitivity => slide(&mut s.onset_sensitivity, dir, activate, 0.05, 0.0, 1.0),
         Holds => toggle(&mut s.generate_holds),
-        Density => slide(&mut s.density_scale, dir, activate, 0.05, 0.5, 2.0),
+        Density => slide(&mut s.density_scale, dir, activate, 0.05, 0.5, 3.0),
         ResetAll => if activate {
             if st.confirm_reset {
                 let device = s.audio_device.clone();

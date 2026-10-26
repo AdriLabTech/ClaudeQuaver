@@ -148,7 +148,7 @@ fn run(key: u64, path: PathBuf, existing: Option<i64>, settings: Settings, cance
     let mut progress = |p: f32, stage: &'static str| {
         if last.elapsed().as_millis() > 80 || p >= 1.0 { last = Instant::now(); let _ = tx.send(Msg::Progress { key, p: 0.1 + p * 0.9, stage }); }
     };
-    match analyze_and_generate(&probed, "", &settings, &paths::maps_dir(), &cancel, &mut progress) {
+    match analyze_and_generate(&probed, "", &settings, &paths::maps_dir(), false, &cancel, &mut progress) {
         Ok(out) => {
             let _ = db.set_status(song_id, Status::Ready, out.warnings.first().map(|s| s.as_str()).filter(|_| out.notes.iter().all(|n| *n == 0)), out.bpm);
             let msg = format!("«{}» listo · {} BPM · notas {:?} · {} ms", probed.title, out.bpm.map_or("?".into(), |b| format!("{b:.0}")), out.notes, out.elapsed_ms);

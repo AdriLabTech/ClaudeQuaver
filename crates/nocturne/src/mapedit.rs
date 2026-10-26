@@ -27,7 +27,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
 
 const NOTE_R: f32 = 40.0;
-const NOTE_POOL: usize = 240;
+const NOTE_POOL: usize = 480;
 const GRID_POOL: usize = 200;
 const CURSOR_FROM_BOTTOM: f32 = 280.0;
 const ZOOM_MIN: f32 = 120.0;
