@@ -116,9 +116,12 @@ impl ScoreState {
         if self.errors_ms.is_empty() { None }
         else { Some(self.errors_ms.iter().map(|e| *e as f64).sum::<f64>() / self.errors_ms.len() as f64) }
     }
-    pub fn grade(&self) -> &'static str {
-        match self.accuracy() { a if a >= 98.0 => "S", a if a >= 95.0 => "A", a if a >= 90.0 => "B", a if a >= 80.0 => "C", _ => "D" }
-    }
+    pub fn grade(&self) -> &'static str { grade_for(self.accuracy()) }
+}
+
+/// Nota (S…D) para una precisión 0..=100.
+pub fn grade_for(accuracy: f64) -> &'static str {
+    match accuracy { a if a >= 98.0 => "S", a if a >= 95.0 => "A", a if a >= 90.0 => "B", a if a >= 80.0 => "C", _ => "D" }
 }
 
 #[cfg(test)]
@@ -158,6 +161,14 @@ mod tests {
         let mut s = ScoreState::new(100);
         for _ in 0..20 { s.register(Judgement::Miss, None) }
         assert!(s.failed);
+    }
+    #[test]
+    fn grades_follow_accuracy_thresholds() {
+        assert_eq!([100.0, 98.0, 97.9, 95.0, 90.0, 80.0, 79.9, 0.0].map(grade_for), ["S", "S", "A", "A", "B", "C", "D", "D"]);
+        let mut s = ScoreState::new(2);
+        s.register(Judgement::Marvelous, Some(0.0));
+        s.register(Judgement::Miss, None);
+        assert_eq!(s.grade(), "D");
     }
     #[test]
     fn invalid_windows_detected() {

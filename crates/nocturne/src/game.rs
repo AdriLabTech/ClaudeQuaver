@@ -4,9 +4,9 @@
 //! de su instante de impacto y de ese reloj (`y = línea + (t_nota − t_actual) · velocidad`), nunca
 //! acumulando desplazamientos por fotograma, así que no depende de los FPS.
 
-use crate::app::{AppDb, Screen};
+use crate::app::{AppDb, ReturnTo, Screen};
 use crate::audio::{prepare, Audio};
-use crate::settings::{key_label, Settings};
+use crate::settings::{Settings, NOTE_BASE_R};
 use crate::theme::*;
 use crate::ui::{self, MenuNav};
 use bevy::prelude::*;
@@ -14,13 +14,10 @@ use nocturne_core::beatmap::{Beatmap, NoteKind};
 use nocturne_core::gameplay::{Event, Judge};
 use nocturne_core::scoring::{Judgement, ScoreState};
 use nocturne_core::Micros;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
-pub const LANE_W: f32 = 116.0;
-const NOTE_R: f32 = 44.0;
 const TOP_Y: f32 = 640.0;
 const PRE_ROLL_S: f64 = 2.5;
 const RESUME_S: f64 = 3.0;
@@ -33,6 +30,17 @@ pub struct PlayRequest {
     pub autoplay: bool,
     /// Si es `true` no se guardan resultados (demo, editor).
     pub practice: bool,
+    /// Instante de la canción desde el que se juega (el editor prueba desde el cursor). Las notas
+    /// anteriores deben haberse quitado del mapa.
+    pub start: Micros,
+    /// Audio ya decodificado y remuestreado al dispositivo (evita decodificar otra vez).
+    pub preloaded: Option<Arc<Vec<f32>>>,
+}
+
+impl PlayRequest {
+    pub fn new(map: Beatmap, audio_path: Option<PathBuf>) -> Self {
+        PlayRequest { map, audio_path, autoplay: false, practice: false, start: Micros::ZERO, preloaded: None }
+    }
 }
 
 #[derive(Resource)]
@@ -65,6 +73,7 @@ pub struct Session {
     speed: f32,
     hit_y: f32,
     scale: f32,
+    pitch: f32,
     vis: Vec<Option<Vis>>,
     next_spawn: usize,
     bot_cursor: usize,
@@ -81,9 +90,7 @@ struct Gfx {
     circle: Handle<Mesh>,
     ring: Handle<Mesh>,
     rect: Handle<Mesh>,
-    outer: Handle<ColorMaterial>,
-    outer_alt: Handle<ColorMaterial>,
-    inner: Handle<ColorMaterial>,
+    note: Handle<ColorMaterial>,
     missed: Handle<ColorMaterial>,
     hold_body: Handle<ColorMaterial>,
     hold_active: Handle<ColorMaterial>,
@@ -91,7 +98,7 @@ struct Gfx {
     press_fill: Handle<ColorMaterial>,
 }
 
-#[derive(Component)] struct Lane(usize);
+#[derive(Component)] struct Lane;
 #[derive(Component)] struct PressFill(usize);
 #[derive(Component)] struct Flash { life: f32, max: f32, base: f32 }
 #[derive(Component)] struct ScoreText;
@@ -125,47 +132,32 @@ fn begin(
     mut nav: ResMut<MenuNav>,
 ) {
     nav.enabled = false;
+    let radius = settings.note_radius();
+    // El anillo es una malla unidad que se escala al radio: su radio interior sale del grosor pedido en px.
+    let inner = (1.0 - settings.receptor_border / radius).clamp(0.05, 0.98);
     let gfx = Gfx {
-        circle: meshes.add(Circle::new(1.0)),
-        ring: meshes.add(Annulus::new(0.88, 1.0)),
+        circle: meshes.add(Circle::new(1.0).mesh().resolution(96)),
+        ring: meshes.add(Annulus::new(inner, 1.0).mesh().resolution(96)),
         rect: meshes.add(Rectangle::new(1.0, 1.0)),
-        outer: mats.add(TEXT),
-        outer_alt: mats.add(hex_grey(0xC9, 0xCD, 0xD3)),
-        inner: mats.add(SURFACE),
-        missed: mats.add(alpha(TEXT_DIM, 0.35)),
-        hold_body: mats.add(alpha(TEXT_DIM, 0.42)),
-        hold_active: mats.add(alpha(WHITE, 0.75)),
-        receptor: mats.add(alpha(TEXT_DIM, 0.8)),
-        press_fill: mats.add(alpha(WHITE, 0.28)),
+        note: mats.add(WHITE),
+        missed: mats.add(alpha(WHITE, 0.18)),
+        hold_body: mats.add(alpha(WHITE, 0.34)),
+        hold_active: mats.add(alpha(WHITE, 0.8)),
+        receptor: mats.add(alpha(WHITE, 0.7)),
+        press_fill: mats.add(alpha(WHITE, 0.3)),
     };
     let speed = settings.scroll_px_per_s();
     let hit_y = -DESIGN_H / 2.0 + settings.hit_line_height;
-    let field_h = DESIGN_H + 200.0;
-    // Panel del campo y separadores.
-    commands.spawn((DespawnOnExit(Screen::Playing), Mesh2d(gfx.rect.clone()), MeshMaterial2d(mats.add(alpha(SURFACE, 0.92))),
-        Transform::from_xyz(0.0, 0.0, 1.0).with_scale(Vec3::new(LANE_W * 4.0, field_h, 1.0))));
-    let line = mats.add(BORDER);
-    for i in 0..=4 {
-        commands.spawn((DespawnOnExit(Screen::Playing), Mesh2d(gfx.rect.clone()), MeshMaterial2d(line.clone()),
-            Transform::from_xyz((i as f32 - 2.0) * LANE_W, 0.0, 2.0).with_scale(Vec3::new(if i == 0 || i == 4 { 3.0 } else { 1.5 }, field_h, 1.0))));
-    }
-    // Línea de impacto + receptores + pistas de teclas.
-    commands.spawn((DespawnOnExit(Screen::Playing), Mesh2d(gfx.rect.clone()), MeshMaterial2d(mats.add(alpha(TEXT_DIM, 0.35))),
-        Transform::from_xyz(0.0, hit_y, 2.5).with_scale(Vec3::new(LANE_W * 4.0, 2.0, 1.0))));
-    let keys = settings.keys();
+    // Pista limpia: cuatro anillos fijos sobre el fondo, sin panel, separadores, línea de impacto ni
+    // letras de teclas. Las notas son discos blancos lisos que caen hasta su anillo.
+    let pitch = settings.lane_pitch();
     for i in 0..4 {
-        let x = (i as f32 - 1.5) * LANE_W;
-        let r = NOTE_R * settings.note_scale;
-        commands.spawn((DespawnOnExit(Screen::Playing), Lane(i), Mesh2d(gfx.ring.clone()), MeshMaterial2d(gfx.receptor.clone()),
+        let x = (i as f32 - 1.5) * pitch;
+        let r = radius;
+        commands.spawn((DespawnOnExit(Screen::Playing), Lane, Mesh2d(gfx.ring.clone()), MeshMaterial2d(gfx.receptor.clone()),
             Transform::from_xyz(x, hit_y, 5.0).with_scale(Vec3::new(r, r, 1.0))));
         commands.spawn((DespawnOnExit(Screen::Playing), PressFill(i), Mesh2d(gfx.circle.clone()), MeshMaterial2d(gfx.press_fill.clone()),
             Transform::from_xyz(x, hit_y, 4.8).with_scale(Vec3::new(r, r, 1.0)), Visibility::Hidden));
-        if settings.show_key_hints {
-            commands.spawn((DespawnOnExit(Screen::Playing),
-                Text2d::new(key_label(keys[i])),
-                TextFont { font: fonts.medium.clone().into(), font_size: FontSize::Px(26.0), ..default() },
-                TextColor(TEXT_DIM), Transform::from_xyz(x, hit_y - 92.0, 5.0)));
-        }
     }
     commands.insert_resource(gfx);
     spawn_hud(&mut commands, &fonts, &req, &settings);
@@ -174,7 +166,11 @@ fn begin(
     let mut phase = Phase::Loading;
     let mut load_rx = None;
     let mut silent = true;
-    if let Some(path) = req.audio_path.clone() {
+    if let (Some(buf), Some(_)) = (req.preloaded.clone(), req.audio_path.as_ref()) {
+        silent = false;
+        audio.install(buf, req.start, false);
+        phase = countdown_start(req.start);
+    } else if let Some(path) = req.audio_path.clone() {
         silent = false;
         let rate = audio.sample_rate();
         let (tx, rx) = mpsc::channel();
@@ -186,24 +182,22 @@ fn begin(
         load_rx = Some(Mutex::new(rx));
     } else {
         audio.unload();
-        phase = countdown_start();
+        phase = countdown_start(req.start);
     }
     let offset_us = ((settings.global_offset_ms + req.map.song_offset_ms as f32) * 1000.0) as i64;
     let judge = Judge::new(&req.map, settings.hit_windows);
     let n = judge.notes().len();
     let last = req.map.notes.iter().map(|n| n.end().0).max().unwrap_or(0);
     commands.insert_resource(Session {
-        judge, phase, load_rx, wall_start: None, silent, offset_us, speed, hit_y, scale: settings.note_scale,
-        vis: vec![None; n], next_spawn: 0, bot_cursor: 0, last_t: Micros(-3_000_000), error: None,
+        judge, phase, load_rx, wall_start: None, silent, offset_us, speed, hit_y, scale: settings.note_scale, pitch,
+        vis: vec![None; n], next_spawn: 0, bot_cursor: 0, last_t: req.start - Micros::from_secs(3.0), error: None,
         max_ms: (last.max(req.map.duration.0 / 2) / 1000) + 1500, req: req.clone(),
     });
     audio.set_volume(settings.music_volume, settings.sfx_volume);
 }
 
-fn hex_grey(r: u8, g: u8, b: u8) -> Color { Color::srgb_u8(r, g, b) }
-
-fn countdown_start() -> Phase {
-    Phase::Countdown { wall: Instant::now(), from_us: -PRE_ROLL_S * 1e6, hold: false, dur_s: PRE_ROLL_S, at: Micros::ZERO, armed: false }
+fn countdown_start(start: Micros) -> Phase {
+    Phase::Countdown { wall: Instant::now(), from_us: start.0 as f64 - PRE_ROLL_S * 1e6, hold: false, dur_s: PRE_ROLL_S, at: start, armed: false }
 }
 
 fn end(mut commands: Commands, mut audio: ResMut<Audio>) {
@@ -247,7 +241,7 @@ fn spawn_hud(commands: &mut Commands, fonts: &Fonts, req: &PlayRequest, s: &Sett
         }
         // Vida
         if s.show_life {
-            p.spawn((Node { position_type: PositionType::Absolute, left: percent(50), margin: UiRect::left(px(LANE_W * 2.0 + 48.0)), bottom: px(s.hit_line_height - 40.0),
+            p.spawn((Node { position_type: PositionType::Absolute, left: percent(50), margin: UiRect::left(px(s.lane_pitch() * 2.0 + 48.0)), bottom: px(s.hit_line_height - 40.0),
                 width: px(6), height: px(260), flex_direction: FlexDirection::ColumnReverse, ..default() }, BackgroundColor(BORDER)))
                 .with_children(|c| { c.spawn((LifeFill, Node { width: percent(100), height: percent(100), ..default() }, BackgroundColor(TEXT_DIM))); });
         }
@@ -279,7 +273,7 @@ fn drive(
     if let Some(r) = loaded {
         s.load_rx = None;
         match r {
-            Ok(buf) => { audio.install(buf, Micros::ZERO, false); s.phase = countdown_start(); }
+            Ok(buf) => { let start = s.req.start; audio.install(buf, start, false); s.phase = countdown_start(start); }
             Err(e) => { s.error = Some(e); s.phase = Phase::Paused; }
         }
     }
@@ -289,9 +283,10 @@ fn drive(
 
     // Transiciones de fase
     let mut to_running = false;
+    let silent = s.silent;
     if let Phase::Countdown { wall, dur_s, at, armed, hold, .. } = &mut s.phase {
         let e = wall.elapsed().as_secs_f64();
-        if !*armed && e >= *dur_s - lat_s && !s.silent {
+        if !*armed && e >= *dur_s - lat_s && !silent {
             // El audio se arranca `latencia` antes para que sea audible justo en el cero.
             audio.seek(*at);
             audio.play();
@@ -387,8 +382,8 @@ fn show_judgement(commands: &mut Commands, j: Judgement) {
 }
 
 fn spawn_flash(commands: &mut Commands, s: &Session, lane: u8, j: Judgement) {
-    let x = (lane as f32 - 1.5) * LANE_W;
-    let r = NOTE_R * s.scale;
+    let x = (lane as f32 - 1.5) * s.pitch;
+    let r = NOTE_BASE_R * s.scale;
     let c = if matches!(j, Judgement::Marvelous | Judgement::Perfect) { WHITE } else { TEXT_DIM };
     commands.queue(move |w: &mut World| {
         let (ring, mat) = { let g = w.resource::<Gfx>(); (g.ring.clone(), c) };
@@ -440,12 +435,13 @@ fn pause_menu(
     roots: Query<Entity, With<PauseRoot>>,
     mut next: ResMut<NextState<Screen>>,
     req: Res<PlayRequest>,
+    back: Res<ReturnTo>,
 ) {
     let paused = matches!(s.phase, Phase::Paused) && s.error.is_none();
     if let Some(err) = s.error.clone() {
         if roots.is_empty() {
             nav.reset(1);
-            commands.spawn((DespawnOnExit(Screen::Playing), PauseRoot, ui::full_screen_root(), BackgroundColor(alpha(BG, 0.92)),
+            commands.spawn((DespawnOnExit(Screen::Playing), PauseRoot, BackgroundColor(alpha(BG, 0.92)),
                 Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, flex_direction: FlexDirection::Column, row_gap: px(16), ..ui::full_screen_root() }))
                 .with_children(|p| {
                     p.spawn(ui::text(&fonts, "No se pudo cargar la canción", 40.0, TEXT, Weight::Medium));
@@ -462,7 +458,7 @@ fn pause_menu(
                 p.spawn(Node { height: px(28), ..default() });
                 p.spawn(ui::menu_item(&fonts, ID_RESUME, 0, "Continuar", None, 32.0));
                 p.spawn(ui::menu_item(&fonts, ID_RESTART, 1, "Reiniciar", None, 32.0));
-                p.spawn(ui::menu_item(&fonts, ID_QUIT, 2, "Salir", None, 32.0));
+                p.spawn(ui::menu_item(&fonts, ID_QUIT, 2, if back.0 == Screen::Editor { "Volver al editor" } else { "Salir" }, None, 32.0));
             });
     }
     if !paused && s.error.is_none() {
@@ -489,7 +485,7 @@ fn pause_menu(
                 commands.insert_resource(req.clone());
                 next.set(Screen::Playing); // re-entrada: reconstruye sesión, campo y HUD
             }
-            _ => { audio.pause(); next.set(Screen::Library) }
+            _ => { audio.pause(); next.set(back.0) }
         }
     }
 }
@@ -510,14 +506,11 @@ fn sync_notes(
         let i = s.next_spawn;
         s.next_spawn += 1;
         if !s.judge.is_pending(i) && !s.judge.is_holding(i) { continue }
-        let x = (n.lane as f32 - 1.5) * LANE_W;
-        let r = NOTE_R * s.scale;
-        let mat_outer = if n.lane == 0 || n.lane == 3 { gfx.outer.clone() } else { gfx.outer_alt.clone() };
+        let x = (n.lane as f32 - 1.5) * s.pitch;
+        let r = NOTE_BASE_R * s.scale;
         let mut body = None;
         let root = commands.spawn((DespawnOnExit(Screen::Playing), Transform::from_xyz(x, TOP_Y + 200.0, 4.0), Visibility::default())).id();
-        let outer = commands.spawn((Mesh2d(gfx.circle.clone()), MeshMaterial2d(mat_outer), Transform::from_xyz(0.0, 0.0, 0.2).with_scale(Vec3::new(r, r, 1.0)), ChildOf(root))).id();
-        commands.spawn((Mesh2d(gfx.circle.clone()), MeshMaterial2d(gfx.inner.clone()), Transform::from_xyz(0.0, 0.0, 0.3).with_scale(Vec3::new(r * 0.66, r * 0.66, 1.0)), ChildOf(root)));
-        commands.spawn((Mesh2d(gfx.circle.clone()), MeshMaterial2d(gfx.outer.clone()), Transform::from_xyz(0.0, 0.0, 0.4).with_scale(Vec3::new(r * 0.16, r * 0.16, 1.0)), ChildOf(root)));
+        let outer = commands.spawn((Mesh2d(gfx.circle.clone()), MeshMaterial2d(gfx.note.clone()), Transform::from_xyz(0.0, 0.0, 0.2).with_scale(Vec3::new(r, r, 1.0)), ChildOf(root))).id();
         if let NoteKind::Hold { end } = n.kind {
             let len = (end - n.time).as_secs() as f32 * s.speed;
             body = Some(commands.spawn((Mesh2d(gfx.rect.clone()), MeshMaterial2d(gfx.hold_body.clone()),
@@ -588,7 +581,7 @@ fn effects(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut F
         tr.translation.y = s.hit_y;
         let sc = f.base * (1.0 + 0.6 * k);
         tr.scale = Vec3::new(sc, sc, 1.0);
-        if let Some(mat) = mats.get_mut(&m.0) { mat.color = mat.color.with_alpha(0.9 * (1.0 - k)) }
+        if let Some(mut mat) = mats.get_mut(&m.0) { mat.color = mat.color.with_alpha(0.9 * (1.0 - k)) }
         if k >= 1.0 { commands.entity(e).despawn() }
     }
 }

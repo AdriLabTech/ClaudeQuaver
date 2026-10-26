@@ -230,7 +230,6 @@ impl Audio {
     }
 
     pub fn is_loaded(&self) -> bool { self.song.is_some() }
-    pub fn is_playing(&self) -> bool { self.playing }
 
     pub fn set_volume(&mut self, v: f32, sfx: f32) {
         self.volume = v.clamp(0.0, 1.0);
