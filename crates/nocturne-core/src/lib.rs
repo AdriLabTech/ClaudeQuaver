@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod beatmap;
 pub mod clock;
 pub mod decode;
+pub mod editor;
 pub mod error;
 pub mod gameplay;
 pub mod resample;

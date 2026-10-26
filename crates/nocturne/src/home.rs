@@ -1,6 +1,6 @@
 //! Pantalla de inicio: composición asimétrica con un eclipse abstracto.
 use crate::app::{AppDb, Screen};
-use crate::jobs::Jobs;
+use crate::jobs::{Jobs, NoticeKind};
 use crate::settings::Settings;
 use crate::theme::*;
 use crate::ui::{self, MenuNav};
@@ -25,8 +25,8 @@ fn build(mut commands: Commands, fonts: Res<Fonts>, mut nav: ResMut<MenuNav>, db
          mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<ColorMaterial>>) {
     nav.reset(6);
     // Eclipse: disco claro, disco negro desplazado → creciente; corona fina alrededor.
-    let disc = meshes.add(Circle::new(1.0));
-    let ring = meshes.add(Annulus::new(0.995, 1.0));
+    let disc = meshes.add(Circle::new(1.0).mesh().resolution(180));
+    let ring = meshes.add(Annulus::new(0.995, 1.0).mesh().resolution(240));
     let (c0, c1) = (480.0, 20.0);
     commands.spawn((DespawnOnExit(Screen::Home), Eclipse, Transform::from_xyz(c0, c1, 0.0), Visibility::default())).with_children(|p| {
         p.spawn((Mesh2d(disc.clone()), MeshMaterial2d(mats.add(alpha(SURFACE_2, 1.0))), Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(330.0))));
@@ -66,11 +66,15 @@ fn build(mut commands: Commands, fonts: Res<Fonts>, mut nav: ResMut<MenuNav>, db
     });
 }
 
-fn act(mut nav: ResMut<MenuNav>, mut next: ResMut<NextState<Screen>>, mut exit: MessageWriter<AppExit>, keys: Res<ButtonInput<KeyCode>>) {
+fn act(mut nav: ResMut<MenuNav>, mut next: ResMut<NextState<Screen>>, mut exit: MessageWriter<AppExit>, keys: Res<ButtonInput<KeyCode>>, mut jobs: ResMut<Jobs>) {
     if keys.just_pressed(KeyCode::Escape) { exit.write(AppExit::Success); return }
     match nav.activated.take() {
         Some(ID_LIBRARY) => next.set(Screen::Library),
-        Some(ID_EDITOR) => next.set(Screen::Editor),
+        Some(ID_EDITOR) => {
+            // El editor trabaja sobre el mapa de una canción: se elige en la biblioteca.
+            jobs.notice("Elige una canción y pulsa E para editar su mapa", NoticeKind::Info);
+            next.set(Screen::Library)
+        }
         Some(ID_STATS) => next.set(Screen::Stats),
         Some(ID_SETTINGS) => next.set(Screen::Settings),
         Some(ID_ABOUT) => next.set(Screen::About),
@@ -80,7 +84,7 @@ fn act(mut nav: ResMut<MenuNav>, mut next: ResMut<NextState<Screen>>, mut exit: 
 }
 
 fn spin(time: Res<Time>, settings: Res<Settings>, mut q: Query<&mut Transform, With<Eclipse>>) {
-    if settings.reduce_motion { return }
+    if settings.motion_reduced() { return }
     for mut t in &mut q { t.rotation = Quat::from_rotation_z((time.elapsed_secs() * 0.04).sin() * 0.12); }
 }
 

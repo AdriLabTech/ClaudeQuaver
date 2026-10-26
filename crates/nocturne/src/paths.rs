@@ -1,10 +1,10 @@
 //! Rutas XDG. `NOCTURNE_HOME` redirige todo (pruebas y ejecuciones aisladas).
 use std::path::PathBuf;
 
-fn home() -> PathBuf { std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")) }
+pub fn home_dir() -> PathBuf { std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")) }
 
 fn xdg(var: &str, fallback: &str) -> PathBuf {
-    std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| home().join(fallback))
+    std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| home_dir().join(fallback))
 }
 
 pub fn config_dir() -> PathBuf {
@@ -28,6 +28,6 @@ pub fn settings_path() -> PathBuf { config_dir().join("settings.json") }
 /// Sustituye el directorio personal por `~` para no escribir rutas personales en logs.
 pub fn redact(p: &std::path::Path) -> String {
     let s = p.to_string_lossy().to_string();
-    let h = home().to_string_lossy().to_string();
+    let h = home_dir().to_string_lossy().to_string();
     if !h.is_empty() && s.starts_with(&h) { format!("~{}", &s[h.len()..]) } else { s }
 }

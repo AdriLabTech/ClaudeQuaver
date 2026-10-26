@@ -14,6 +14,7 @@ pub const BORDER: Color = hex(0x29, 0x2D, 0x34);
 pub const TEXT_DIM: Color = hex(0x92, 0x98, 0xA2);
 pub const TEXT: Color = hex(0xF2, 0xF3, 0xF5);
 pub const WHITE: Color = hex(0xFF, 0xFF, 0xFF);
+#[allow(dead_code)] // ficha del sistema de diseño, reservada para énfasis cálido
 pub const TEXT_WARM: Color = hex(0xD9, 0xD4, 0xCC);
 /// Solo funcional: fallo/error.
 pub const DANGER: Color = hex(0xC4, 0x5B, 0x5B);
@@ -46,6 +47,7 @@ pub fn load_fonts(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // `Bold` completa la familia tipográfica embebida
 pub enum Weight { Light, Regular, Medium, Bold }
 
 impl Fonts {

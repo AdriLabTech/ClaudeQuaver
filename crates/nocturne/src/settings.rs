@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const SETTINGS_VERSION: u32 = 1;
+/// Radio base de una nota con `note_scale = 1`.
+pub const NOTE_BASE_R: f32 = 44.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KeyProfile {
@@ -22,12 +24,16 @@ pub struct Settings {
     // Gameplay
     /// 1..40; píxeles/s = velocidad × 55 sobre un alto de diseño de 1080.
     pub scroll_speed: f32,
+    /// Tamaño de las notas y de los círculos fijos (1 = 88 px de diámetro sobre el alto de diseño).
     pub note_scale: f32,
-    /// Altura de la línea de impacto sobre el borde inferior (px de diseño).
+    /// Espacio libre (px de diseño) entre los bordes de dos notas de carriles contiguos.
+    pub lane_gap: f32,
+    /// Grosor (px de diseño) del borde de los círculos fijos.
+    pub receptor_border: f32,
+    /// Altura del centro de los receptores sobre el borde inferior (px de diseño).
     pub hit_line_height: f32,
     pub show_judgement: bool,
     pub show_hit_effects: bool,
-    pub show_key_hints: bool,
     pub show_progress: bool,
     pub show_life: bool,
     pub no_fail: bool,
@@ -47,6 +53,9 @@ pub struct Settings {
     pub fps_limit: u32,
     pub ui_scale: f32,
     pub reduce_motion: bool,
+    /// Modo minimalista/competitivo: sin anillos al acertar, sin resalte de pulsación, sin
+    /// desvanecidos ni animaciones. La información (juicios, combo, vida) no se toca.
+    pub minimal_visuals: bool,
     pub show_diagnostics: bool,
     // Análisis
     pub onset_sensitivity: f32,
@@ -60,13 +69,13 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             version: SETTINGS_VERSION,
-            scroll_speed: 20.0, note_scale: 1.0, hit_line_height: 180.0,
-            show_judgement: true, show_hit_effects: true, show_key_hints: true, show_progress: true, show_life: true,
+            scroll_speed: 20.0, note_scale: 1.3, lane_gap: 8.0, receptor_border: 3.0, hit_line_height: 96.0,
+            show_judgement: true, show_hit_effects: true, show_progress: true, show_life: true,
             no_fail: false, hit_windows: HitWindows::default(),
             profiles: vec![KeyProfile { name: "Estándar".into(), keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK] }],
             active_profile: 0,
             music_volume: 0.7, sfx_volume: 0.5, audio_device: None, global_offset_ms: 0.0,
-            fullscreen: false, vsync: true, fps_limit: 0, ui_scale: 1.0, reduce_motion: false, show_diagnostics: false,
+            fullscreen: false, vsync: true, fps_limit: 0, ui_scale: 1.0, reduce_motion: false, minimal_visuals: false, show_diagnostics: false,
             onset_sensitivity: 0.5, generate_holds: true, density_scale: 1.0,
             warnings: vec![],
         }
@@ -76,6 +85,18 @@ impl Default for Settings {
 impl Settings {
     pub fn keys(&self) -> [KeyCode; 4] { self.profiles[self.active_profile.min(self.profiles.len() - 1)].keys }
     pub fn scroll_px_per_s(&self) -> f32 { self.scroll_speed * 55.0 }
+
+    /// ¿Animaciones atenuadas o ausentes? (ajuste propio o modo minimalista).
+    pub fn motion_reduced(&self) -> bool { self.reduce_motion || self.minimal_visuals }
+    /// ¿Anillo al acertar cada nota?
+    pub fn hit_effects(&self) -> bool { self.show_hit_effects && !self.minimal_visuals }
+    /// ¿Se ilumina el círculo fijo mientras se mantiene la tecla?
+    pub fn press_highlight(&self) -> bool { !self.minimal_visuals }
+
+    /// Radio de las notas (px de diseño).
+    pub fn note_radius(&self) -> f32 { NOTE_BASE_R * self.note_scale }
+    /// Distancia entre los centros de dos carriles contiguos.
+    pub fn lane_pitch(&self) -> f32 { 2.0 * self.note_radius() + self.lane_gap }
 
     pub fn analysis_params(&self) -> AnalysisParams {
         AnalysisParams { onset_sensitivity: self.onset_sensitivity, ..Default::default() }
@@ -90,8 +111,10 @@ impl Settings {
         }
         let d = Settings::default();
         clamp(&mut w, "velocidad", &mut self.scroll_speed, 1.0, 40.0, d.scroll_speed);
-        clamp(&mut w, "escala de notas", &mut self.note_scale, 0.6, 1.5, d.note_scale);
-        clamp(&mut w, "altura de la línea", &mut self.hit_line_height, 60.0, 400.0, d.hit_line_height);
+        clamp(&mut w, "escala de notas", &mut self.note_scale, 0.6, 2.0, d.note_scale);
+        clamp(&mut w, "separación entre carriles", &mut self.lane_gap, 0.0, 80.0, d.lane_gap);
+        clamp(&mut w, "borde de los círculos", &mut self.receptor_border, 1.0, 16.0, d.receptor_border);
+        clamp(&mut w, "altura de los receptores", &mut self.hit_line_height, 60.0, 400.0, d.hit_line_height);
         clamp(&mut w, "volumen de música", &mut self.music_volume, 0.0, 1.0, d.music_volume);
         clamp(&mut w, "volumen de efectos", &mut self.sfx_volume, 0.0, 1.0, d.sfx_volume);
         clamp(&mut w, "offset global", &mut self.global_offset_ms, -300.0, 300.0, 0.0);
@@ -227,6 +250,44 @@ mod tests {
         s.profiles[0].keys = [KeyCode::KeyD, KeyCode::KeyD, KeyCode::KeyJ, KeyCode::KeyK];
         assert!(!s.validate().is_empty());
         assert_eq!(s.keys()[1], KeyCode::KeyF);
+    }
+    #[test]
+    fn field_geometry_follows_size_and_gap() {
+        let mut s = Settings::default();
+        s.note_scale = 1.0;
+        s.lane_gap = 0.0;
+        assert_eq!((s.note_radius(), s.lane_pitch()), (44.0, 88.0), "sin separación las notas se tocan");
+        s.lane_gap = 12.0;
+        assert_eq!(s.lane_pitch(), 100.0);
+        s.note_scale = 2.0;
+        assert_eq!(s.lane_pitch(), 100.0 + 88.0);
+        let d = Settings::default();
+        assert!(d.note_radius() > 44.0 && d.lane_gap < 28.0 && d.receptor_border < 5.0, "valores por defecto: notas más grandes, más juntas y borde fino");
+    }
+    #[test]
+    fn minimal_mode_switches_off_decorations_but_not_information() {
+        let mut s = Settings::default();
+        assert!(s.hit_effects() && s.press_highlight() && !s.motion_reduced(), "por defecto hay efectos");
+        s.minimal_visuals = true;
+        assert!(!s.hit_effects() && !s.press_highlight() && s.motion_reduced());
+        assert!(s.show_judgement && s.show_life && s.show_progress, "los datos del HUD siguen su propio ajuste");
+        s.minimal_visuals = false;
+        s.show_hit_effects = false;
+        assert!(!s.hit_effects(), "el ajuste individual sigue funcionando");
+        s.reduce_motion = true;
+        assert!(s.motion_reduced());
+        // un archivo antiguo sin el campo sigue cargando con el valor por defecto
+        let p = tmp("m.json");
+        std::fs::write(&p, r#"{"scroll_speed": 12.0}"#).unwrap();
+        assert!(!Settings::load(&p).minimal_visuals);
+    }
+    #[test]
+    fn new_visual_settings_are_clamped() {
+        let p = tmp("v.json");
+        std::fs::write(&p, r#"{"note_scale": 9.0, "lane_gap": -4.0, "receptor_border": 0.0}"#).unwrap();
+        let s = Settings::load(&p);
+        assert_eq!((s.note_scale, s.lane_gap, s.receptor_border), (2.0, 0.0, 1.0));
+        assert_eq!(s.warnings.len(), 3);
     }
     #[test]
     fn key_labels() {
