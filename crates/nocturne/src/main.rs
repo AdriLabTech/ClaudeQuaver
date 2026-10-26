@@ -4,6 +4,7 @@ mod audio;
 mod calibrate;
 mod db;
 mod demo;
+mod fx;
 mod game;
 mod home;
 mod import;
@@ -161,7 +162,7 @@ fn main() {
         .add_systems(PreStartup, theme::load_fonts)
         .add_systems(Startup, (setup_camera, boot))
         .add_systems(Update, (scale_ui, jobs::poll, window_sync, toggle_fullscreen, frame_limit, diagnostics, cli_shot))
-        .add_plugins((ui::plugin, home::plugin, library::plugin, game::plugin, results::plugin, toast::plugin,
+        .add_plugins((ui::plugin, fx::plugin, home::plugin, library::plugin, game::plugin, results::plugin, toast::plugin,
                       settings_ui::plugin, stats::plugin, about::plugin, calibrate::plugin, mapedit::plugin));
     if let Some(s) = session {
         app.insert_resource(s).init_resource::<ReturnTo>();

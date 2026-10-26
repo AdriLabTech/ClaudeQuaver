@@ -63,7 +63,7 @@ fn build(mut commands: Commands, mut data: ResMut<StatsData>, db: Res<AppDb>, fo
         }).collect();
     }
     let d = &*data;
-    commands.spawn((DespawnOnExit(Screen::Stats),
+    commands.spawn((DespawnOnExit(Screen::Stats), crate::fx::appear(0.0, Vec2::new(0.0, 22.0)),
         Node { flex_direction: FlexDirection::Column, padding: UiRect::new(px(96), px(96), px(64), px(40)), row_gap: px(30), ..ui::full_screen_root() }))
         .with_children(|root| {
             root.spawn(ui::spaced(&fonts, "ESTADÍSTICAS", 38.0, TEXT, Weight::Light, 10.0));

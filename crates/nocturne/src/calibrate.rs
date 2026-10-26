@@ -94,7 +94,7 @@ fn stop(mut audio: ResMut<Audio>, settings: Res<Settings>) {
 }
 
 fn build(mut commands: Commands, fonts: Res<Fonts>) {
-    commands.spawn((DespawnOnExit(Screen::Calibrate),
+    commands.spawn((DespawnOnExit(Screen::Calibrate), crate::fx::appear(0.0, Vec2::new(0.0, 22.0)),
         Node { flex_direction: FlexDirection::Column, padding: UiRect::new(px(96), px(96), px(64), px(40)), row_gap: px(26), ..ui::full_screen_root() }))
         .with_children(|root| {
             root.spawn(ui::spaced(&fonts, "CALIBRACIÓN", 38.0, TEXT, Weight::Light, 10.0));
