@@ -1,0 +1,12 @@
+[package]
+name = "nocturne-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rustfft = "6.4"
+symphonia = { version = "0.6", features = ["mp3", "aac", "isomp4", "flac", "ogg", "vorbis", "wav", "pcm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"

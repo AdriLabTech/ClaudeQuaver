@@ -1,0 +1,13 @@
+[package]
+name = "nocturne"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nocturne-core = { path = "../nocturne-core" }
+cpal = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+bevy = { version = "0.20", default-features = false, features = ["2d", "ui", "wayland", "x11", "serialize"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
