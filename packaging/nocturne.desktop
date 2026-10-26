@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Nocturne
+GenericName=Juego de ritmo
+Comment=Tu música, convertida en mapa de ritmo
+Exec=nocturne
+Terminal=false
+Categories=Game;
+Keywords=ritmo;rhythm;música;music;4K;mania;
+StartupWMClass=nocturne

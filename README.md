@@ -9,19 +9,76 @@ si un mapa no te convence, lo corriges en el editor.
 * Análisis determinista: el mismo audio produce siempre el mismo mapa.
 * Todo local: biblioteca en SQLite, mapas en JSON, ajustes en JSON. Sin red.
 
-## Compilar y ejecutar
+## Instalación
 
-Hace falta Rust estable reciente (Bevy 0.20 exige 1.97.1 o superior).
+Hace falta Rust estable reciente (Bevy 0.20 exige **1.97.1 o superior**) y un driver Vulkan (Bevy
+renderiza con wgpu). El audio sale por ALSA, que en un sistema con PipeWire pasa por `pipewire-alsa`.
+
+### Arch Linux y Ryoku Arch
+
+Ryoku es Arch con `pacman` y escritorio Wayland (Hyprland o niri), así que la guía es la misma. Arch no
+tiene paquetes `-dev`: las cabeceras vienen con cada librería. `--needed` salta lo que ya tengas.
+
+**1. Dependencias**
 
 ```sh
-cargo run --release -p nocturne
+sudo pacman -S --needed base-devel git rust pkgconf alsa-lib systemd-libs wayland \
+    libxkbcommon libxkbcommon-x11 libx11 libxcursor libxi libxrandr vulkan-icd-loader
 ```
 
-En Linux se necesitan las cabeceras de ALSA, udev, Wayland/X11 y xkbcommon. En Debian/Ubuntu:
+* **Rust**: el paquete `rust` de Arch suele estar al día; comprueba `rustc --version` (≥ 1.97.1). Si prefieres
+  `rustup` (entra en conflicto con `rust`, así que quita `rust` del comando): `rustup default stable && rustup update`.
+* **Driver Vulkan** según tu GPU: AMD `vulkan-radeon`, Intel `vulkan-intel`, NVIDIA `nvidia-utils` (con el driver
+  propietario). Ryoku detecta tu GPU al instalarse y normalmente ya lo trae; compruébalo con
+  `vulkaninfo --summary` (paquete `vulkan-tools`).
+* **Audio**: `sudo pacman -S --needed pipewire pipewire-alsa pipewire-pulse wireplumber` si aún no usas PipeWire.
+
+**2. Compilar**
 
 ```sh
-sudo apt install libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev pkg-config
+git clone https://github.com/AdriLabTech/ClaudeQuaver.git nocturne
+cd nocturne
+cargo build --release --locked -p nocturne
 ```
+
+La primera compilación tarda varios minutos (Bevy). Para probarlo sin instalar: `./target/release/nocturne`.
+
+**3. Instalar** (opcional; deja `nocturne` en el `PATH` y una entrada en el lanzador de aplicaciones)
+
+```sh
+sudo install -Dm755 target/release/nocturne /usr/local/bin/nocturne
+sudo install -Dm644 packaging/nocturne.desktop /usr/local/share/applications/nocturne.desktop
+```
+
+* **Actualizar**: `git pull`, vuelve a compilar y repite los dos `install`.
+* **Desinstalar**: `sudo rm /usr/local/bin/nocturne /usr/local/share/applications/nocturne.desktop`.
+  Tus datos quedan en `~/.config/nocturne` y `~/.local/share/nocturne`; bórralos si quieres empezar de cero.
+
+**En Hyprland o niri**: la ventana usa el `app_id` (clase) `nocturne`, por si quieres una regla de ventana para
+que se abra flotante o a pantalla completa (mira la sintaxis en la documentación de tu compositor). `F11`
+alterna la pantalla completa dentro del juego.
+
+### Debian y Ubuntu
+
+```sh
+sudo apt install build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+    libxkbcommon-x11-0 libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan1 mesa-vulkan-drivers
+cargo build --release --locked -p nocturne
+```
+
+Para probar sin instalar nada en cualquier distribución: `cargo run --release -p nocturne`.
+
+### Solución de problemas
+
+| Síntoma | Causa y arreglo |
+|---|---|
+| `rustc 1.9x is not supported by the following packages: bevy…` | Rust demasiado antiguo: `sudo pacman -Syu rust` (o `rustup update`). |
+| `The system library alsa required by crate alsa-sys was not found` | Falta `alsa-lib` (y `pkgconf`). |
+| `wayland-client.pc` / `xkbcommon` / `x11.pc` no encontrados | Faltan `wayland`, `libxkbcommon`, `libx11`: instala la lista del paso 1. |
+| `Library libxkbcommon-x11.so could not be loaded` al arrancar | Falta `libxkbcommon-x11`. |
+| Ventana negra o error de wgpu («no adapter») | Falta el driver Vulkan de tu GPU (arriba). Prueba `WGPU_BACKEND=vulkan nocturne`. |
+| Sin sonido, o aviso «Audio no disponible» | Instala `pipewire-alsa`. `nocturne --probe-audio` lista las salidas y mide la latencia; elige otra en Ajustes → Audio. |
+| Error de compilación de SQLite (`cc`) | Falta un compilador de C: instala `base-devel`. |
 
 ## Cómo se usa
 
@@ -94,6 +151,7 @@ crates/nocturne        la aplicación (Bevy): pantallas, audio (cpal), base de d
 docs/BEATMAP_FORMAT.md formato del mapa (JSON versionado)
 docs/AUDIO_ANALYSIS.md cómo se analiza el audio y cómo se generan los mapas
 tools/run_on_laptop.sh script de verificación para Hyprland
+packaging/             entrada de escritorio (.desktop) para el lanzador de aplicaciones
 ```
 
 Decisiones de diseño que conviene conocer:
