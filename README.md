@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/hero.svg" alt="ClaudeQuaver" width="100%"></p>
+
 # Nocturne
 
 **Tu música, convertida en mapa de ritmo.** Nocturne es un juego de ritmo de cuatro carriles escrito
